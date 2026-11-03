@@ -127,7 +127,8 @@ models are hidden, metrics, clean shutdown, and the fail-open fallback.
 ## Limits
 
 - The upstream must speak chat completions. Models that only serve the
-  Responses API cannot be in the pool behind copilot-api.
+  Responses API need a translating upstream (the homelab's copilot-api
+  0ea08fe-p5 does this for Copilot's GPT-5.x/6.x, grok and mai models).
 - Scoring is heuristic. An embedding classifier is planned once the decision
   logs show where the heuristics miss.
 - Clients that compress or truncate history can lose the message that set
