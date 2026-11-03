@@ -33,6 +33,7 @@ from pinball.features import BodyError, parse
 log = logging.getLogger("pinball")
 
 HINT_HEADER: Final = "x-pinball-tier"
+MIN_TIER_HEADER: Final = "x-pinball-min-tier"
 CALLER_HEADER: Final = "x-agw-caller"
 LISTENER_HEADER: Final = "x-pinball-listener"
 _JSON: Final = "application/json"
@@ -103,8 +104,8 @@ def _hint(raw: str) -> Tier | None:
 def create_app(decider: Decider, metrics: Metrics) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-    def decide(body: bytes, hint: Tier | None) -> Decision:
-        return decider.decide(parse(body), hint)
+    def decide(body: bytes, hint: Tier | None, floor: Tier | None) -> Decision:
+        return decider.decide(parse(body), hint, floor)
 
     @app.get("/healthz")
     async def healthz() -> Response:
@@ -126,7 +127,10 @@ def create_app(decider: Decider, metrics: Metrics) -> FastAPI:
         try:
             # Parsing a multi-MB body is CPU work; keep /healthz responsive.
             decision = await anyio.to_thread.run_sync(
-                decide, body, _hint(_header(request, HINT_HEADER))
+                decide,
+                body,
+                _hint(_header(request, HINT_HEADER)),
+                _hint(_header(request, MIN_TIER_HEADER)),
             )
         except BodyError as e:
             metrics.skipped.labels(reason=e.reason).inc()

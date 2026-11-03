@@ -79,7 +79,8 @@ llm:
           # unreachable. pinball itself always answers 200.
           failureMode: allow
           includeRequestBody: {maxRequestBytes: 16777216}
-          includeRequestHeaders: [content-type, x-pinball-tier, x-agw-caller]
+          includeRequestHeaders:
+            [content-type, x-pinball-tier, x-pinball-min-tier, x-agw-caller]
           protocol:
             http:
               path: '"/check"'

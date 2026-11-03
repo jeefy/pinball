@@ -74,7 +74,10 @@ estimated prompt (chars / 3.5, plus 1,600 per image, times `headroom`) and
 that supports vision if the request has images. If nothing in the tier fits,
 it tries the tiers above. If nothing fits anywhere, it picks the largest
 window. The `x-pinball-tier: light|standard|heavy` request header, when the
-gateway forwards it, overrides the score.
+gateway forwards it, overrides the score. `x-pinball-min-tier: light|standard|heavy`
+is a floor instead: the tier is raised to at least that value, and a higher score
+still wins. The decision gets a `min_tier:<tier>` signal only when the floor raised
+the tier. `x-pinball-tier` wins when both are present; invalid values are ignored.
 
 All of this lives in [`pinball.yaml`](pinball.yaml): the model pool with
 prompt windows, per-tier preference order, thresholds, signal points and

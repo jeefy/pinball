@@ -41,6 +41,25 @@ def test_unknown_hint_is_ignored(client: TestClient):
     assert r.json()["tier"] == "light"
 
 
+def test_min_tier_header_raises_the_tier_and_is_counted(client: TestClient):
+    r = client.post("/check", content=chat("hi"), headers={"x-pinball-min-tier": "Standard"})
+    assert (r.json()["tier"], r.json()["reason"]) == ("standard", "short,min_tier:standard")
+    assert 'pinball_signals_total{signal="min_tier"} 1.0' in client.get("/metrics").text
+
+
+def test_tier_header_beats_min_tier_header(client: TestClient):
+    headers = {"x-pinball-tier": "light", "x-pinball-min-tier": "heavy"}
+    r = client.post("/check", content=chat("hi"), headers=headers)
+    assert r.json()["tier"] == "light"
+    assert "min_tier" not in r.json()["reason"]
+
+
+def test_unknown_min_tier_is_ignored(client: TestClient):
+    r = client.post("/check", content=chat("hi"), headers={"x-pinball-min-tier": "ludicrous"})
+    assert r.json()["tier"] == "light"
+    assert "min_tier" not in r.json()["reason"]
+
+
 def test_unreadable_body_answers_200_with_empty_model(client: TestClient, metrics: Metrics):
     r = client.post("/check", content=b"not json")
     assert r.status_code == 200
@@ -49,7 +68,9 @@ def test_unreadable_body_answers_200_with_empty_model(client: TestClient, metric
 
 
 class _Exploding(Decider):
-    def decide(self, features: Features, hint: Tier | None = None) -> Decision:
+    def decide(
+        self, features: Features, hint: Tier | None = None, floor: Tier | None = None
+    ) -> Decision:
         raise RuntimeError("boom")
 
 

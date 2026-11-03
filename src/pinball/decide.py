@@ -49,7 +49,9 @@ class Decider:
         self._light = keyword_pattern(config.light_keywords)
         self._largest = max(config.models, key=lambda n: config.models[n].prompt_tokens)
 
-    def decide(self, features: Features, hint: Tier | None = None) -> Decision:
+    def decide(
+        self, features: Features, hint: Tier | None = None, floor: Tier | None = None
+    ) -> Decision:
         texts = [_unwrap(t, self._config.wrapped_user_messages) for t in features.user_texts]
         message = max(
             (self._score_message(t) for t in texts if t is not None),
@@ -64,6 +66,9 @@ class Decider:
 
         if hint is None:
             tier = self._tier_for(score)
+            if floor is not None and TIER_ORDER.index(floor) > TIER_ORDER.index(tier):
+                tier = floor
+                signals.append(f"min_tier:{floor}")
         else:
             tier = hint
             signals.append(f"hint:{hint}")

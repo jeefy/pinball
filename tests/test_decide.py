@@ -31,8 +31,8 @@ def chat(*users: str, **extra: object) -> bytes:
     )
 
 
-def decide(raw: bytes, hint: Tier | None = None):
-    return Decider(CONFIG).decide(parse(raw), hint)
+def decide(raw: bytes, hint: Tier | None = None, floor: Tier | None = None):
+    return Decider(CONFIG).decide(parse(raw), hint, floor)
 
 
 def test_short_title_request_with_small_output_goes_light():
@@ -141,6 +141,37 @@ def test_hint_overrides_the_score(hint: Tier):
     d = decide(chat("Refactor for security " + "x" * 200, tools=[{}]), hint)
     assert d.tier is hint
     assert f"hint:{hint}" in d.signals
+
+
+def test_floor_raises_light_to_standard_and_says_so():
+    d = decide(chat("Generate a title", max_tokens=20), floor=Tier.STANDARD)
+    assert (d.tier, d.model) == (Tier.STANDARD, "s1")
+    assert "min_tier:standard" in d.signals
+
+
+def test_floor_does_not_lower_a_higher_score():
+    d = decide(chat("Refactor for security " + "x" * 200, tools=[{}]), floor=Tier.STANDARD)
+    assert d.tier is Tier.HEAVY
+    assert not any(s.startswith("min_tier") for s in d.signals)
+
+
+def test_floor_at_the_scored_tier_adds_no_signal():
+    d = decide(chat("x" * 200, tools=[{"type": "function"}]), floor=Tier.STANDARD)
+    assert (d.tier, d.signals) == (Tier.STANDARD, ("tools",))
+
+
+def test_hint_beats_floor():
+    d = decide(chat("hi"), Tier.LIGHT, Tier.HEAVY)
+    assert (d.tier, d.model) == (Tier.LIGHT, "l1")
+    assert not any(s.startswith("min_tier") for s in d.signals)
+
+
+def test_floored_tier_without_a_fitting_model_falls_up():
+    raw = chat("hi", max_tokens=20, system="x" * 10000)
+    assert decide(raw).tier is Tier.LIGHT
+    d = decide(raw, floor=Tier.STANDARD)
+    assert (d.tier, d.model) == (Tier.STANDARD, "h1")
+    assert {"min_tier:standard", "fit:h1"} <= set(d.signals)
 
 
 def test_shipped_config_routes_title_to_haiku_and_debugging_to_opus():
