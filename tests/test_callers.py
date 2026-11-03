@@ -12,7 +12,13 @@ from pinball.config import Tier
 from pinball.optimize import cli
 from pinball.optimize.caller_settings import CallerSettings, caller_settings_from_env
 from pinball.optimize.callers import Learned, plan_profiles
-from pinball.optimize.db import POOL_SQL, WINDOW_CALLER_SQL, FakeDb, Window
+from pinball.optimize.db import (
+    POOL_SQL,
+    WINDOW_CALLER_SQL,
+    WINDOW_SQL,
+    FakeDb,
+    Window,
+)
 from pinball.optimize.sample import draw_samples
 from pinball.overlay import CallerProfile, load_overlay
 
@@ -68,6 +74,13 @@ def go(tmp_path: Path, db: FakeDb, gw: FakeGateway | None, *argv: str, when=NOW,
 def test_pool_sql_reads_caller_from_agentgateway_user():
     assert "agentgateway_user" in POOL_SQL and "AS caller" in POOL_SQL
     assert "%(caller)s" in WINDOW_CALLER_SQL
+
+
+def test_every_query_reads_both_virtual_model_names():
+    # OpenCode sends model=pinball; other clients send auto. Both are routed by the same
+    # virtual model, so a filter on 'auto' alone hid most real traffic (first live run).
+    for sql in (POOL_SQL, WINDOW_SQL):
+        assert "IN ('auto', 'pinball')" in sql
 
 
 def test_caller_below_minimum_gets_no_profile(tmp_path: Path):
