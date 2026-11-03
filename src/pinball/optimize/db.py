@@ -34,15 +34,22 @@ class Window:
 
 class ReplayDb(Protocol):
     def pool(self, days: int) -> list[dict[str, Any]]:
-        """[{id, tier}] of replayable successful `auto` requests."""
+        """[{id, tier, caller}] of replayable successful `auto` requests."""
         ...
 
     def payloads(self, ids: Sequence[str]) -> list[dict[str, Any]]:
         """Full rows (incl. request/response JSON) for `ids`."""
         ...
 
-    def window(self, start: datetime, end: datetime) -> Window: ...
+    def window(self, start: datetime, end: datetime, caller: str | None = None) -> Window:
+        """Health of `auto` traffic; one caller only when `caller` is given."""
+        ...
 
+
+# The gateway stores the x-agw-caller header in request_logs.agentgateway_user (the
+# same column the eval-*/pinball-* exclusion reads). It is cut to 64 chars here, as
+# pinball does before profile lookup, so longer caller-supplied strings never leave SQL.
+CALLER_COL: LiteralString = "left(coalesce(r.agentgateway_user, ''), 64)"
 
 _EXCLUDE: LiteralString = """
   AND coalesce(r.agentgateway_user, '') NOT LIKE 'eval-%%'
@@ -51,7 +58,10 @@ _EXCLUDE: LiteralString = """
 
 POOL_SQL: LiteralString = (
     """
-SELECT r.id::text AS id, r.attributes_json->>'pinball.tier' AS tier
+SELECT r.id::text AS id, r.attributes_json->>'pinball.tier' AS tier,
+  """
+    + CALLER_COL
+    + """ AS caller
 FROM request_logs r JOIN request_log_payloads p ON p.log_id = r.id
 WHERE r.attributes_json->>'agw.ai.original_model' = 'auto'
   AND r.http_status BETWEEN 200 AND 299 AND r.error IS NULL
@@ -67,8 +77,12 @@ WHERE r.attributes_json->>'agw.ai.original_model' = 'auto'
     + "ORDER BY r.id"
 )
 
-PAYLOADS_SQL: LiteralString = """
+PAYLOADS_SQL: LiteralString = (
+    """
 SELECT r.id::text AS id, r.attributes_json->>'pinball.tier' AS tier,
+  """
+    + CALLER_COL
+    + """ AS caller,
   r.attributes_json->>'pinball.reason' AS reason,
   r.attributes_json->>'pinball.model' AS pinball_model,
   r.gen_ai_response_model AS served_model, r.input_tokens, r.output_tokens,
@@ -76,6 +90,7 @@ SELECT r.id::text AS id, r.attributes_json->>'pinball.tier' AS tier,
 FROM request_logs r JOIN request_log_payloads p ON p.log_id = r.id
 WHERE r.id::text = ANY(%(ids)s)
 """
+)
 
 WINDOW_SQL: LiteralString = (
     """
@@ -89,6 +104,8 @@ WHERE r.attributes_json->>'agw.ai.original_model' = 'auto'
 """
     + _EXCLUDE
 )
+
+WINDOW_CALLER_SQL: LiteralString = WINDOW_SQL + "  AND " + CALLER_COL + " = %(caller)s\n"
 
 
 class PostgresDb:
@@ -115,8 +132,12 @@ class PostgresDb:
     def payloads(self, ids: Sequence[str]) -> list[dict[str, Any]]:
         return self._query(PAYLOADS_SQL, {"ids": list(ids)})
 
-    def window(self, start: datetime, end: datetime) -> Window:
-        row = self._query(WINDOW_SQL, {"start": start, "end": end})[0]
+    def window(self, start: datetime, end: datetime, caller: str | None = None) -> Window:
+        if caller is None:
+            row = self._query(WINDOW_SQL, {"start": start, "end": end})[0]
+        else:
+            params = {"start": start, "end": end, "caller": caller}
+            row = self._query(WINDOW_CALLER_SQL, params)[0]
         return Window(
             int(row["requests"]), int(row["errors"]), float(row["cost"]), int(row["priced"])
         )
@@ -131,11 +152,13 @@ class FakeDb:
 
     rows: list[dict[str, Any]] = field(default_factory=list)
     windows: list[tuple[datetime, datetime, Window]] = field(default_factory=list)
+    caller_windows: dict[tuple[str, datetime, datetime], Window] = field(default_factory=dict)
     payload_calls: int = 0
 
     def pool(self, days: int) -> list[dict[str, Any]]:
         return [
-            {"id": r["id"], "tier": r["tier"]} for r in sorted(self.rows, key=lambda r: r["id"])
+            {"id": r["id"], "tier": r["tier"], "caller": str(r.get("caller") or "")[:64]}
+            for r in sorted(self.rows, key=lambda r: r["id"])
         ]
 
     def payloads(self, ids: Sequence[str]) -> list[dict[str, Any]]:
@@ -143,7 +166,9 @@ class FakeDb:
         wanted = set(ids)
         return [dict(r) for r in self.rows if r["id"] in wanted]
 
-    def window(self, start: datetime, end: datetime) -> Window:
+    def window(self, start: datetime, end: datetime, caller: str | None = None) -> Window:
+        if caller is not None:
+            return self.caller_windows.get((caller, start, end), Window(0, 0, 0.0, 0))
         for s, e, w in self.windows:
             if s == start and e == end:
                 return w

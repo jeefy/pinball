@@ -180,6 +180,38 @@ rises by more than `error_margin` relative and `error_floor` absolute, or
 cost per request rises by more than `cost_margin`, with at least
 `min_requests` in each window. Overlays not written by the optimizer are left alone.
 
+**Per-caller profiles.** The gateway stores the `x-agw-caller` header in
+`request_logs.agentgateway_user` (the column the `eval-*`/`pinball-*`
+exclusion already reads); the optimizer reads it cut to 64 chars, the same key
+pinball matches. On top of the global sample, every caller with at least
+`PINBALL_OPT_CALLER_MIN_SAMPLES` pool rows (busiest first, at most
+`_MAX_PROFILES`) gets up to `_CALLER_PER_TIER` extra samples per tier from rows
+the global sample did not take (seed `<seed>:<caller>:<tier>`). The global
+ranking only ever sees the global sample. For a caller with at least
+`_CALLER_MIN_SAMPLES` **judged non-agentic** samples (global + its own):
+
+- `tier_order`: the same rerank (margin, max moves, agentic cap) over that
+  caller's evidence, starting from tonight's global order; written only for
+  tiers whose order differs.
+- `weight = n / (n + PINBALL_OPT_CALLER_SHRINK_K)`.
+- `threshold_offsets.standard = -1` only when the caller's light-tier served
+  replies are judged unacceptable more often than the global light rate by
+  more than `_CALLER_LIGHT_FAIL_GAP` (with at least `PINBALL_OPT_MIN_SAMPLES`
+  light verdicts). Nothing else is ever learned; `heavy` stays 0.
+
+A caller below the minimum, or whose evidence matches global, gets no profile
+(it inherits global). Each profile is checked with `merge()` before the write
+(an invalid one is skipped and audited as `rejected <reason>`); at most
+`_CALLER_MAX_CHANGES` profiles are added or changed per night. A profile whose
+caller has not appeared in the pool for `_CALLER_STALE_DAYS` is dropped.
+Per-caller state (`last_seen`, `changed_at`, previous profile) lives in
+`<overlay>.callers.json`. The audit line's `callers` map carries counts,
+scores, moves and the result per caller, never text.
+`--check-revert` also compares each changed caller's own traffic over the same
+windows and margins (needs `_CALLER_REVERT_MIN_REQUESTS` per window) and
+restores only that caller's previous profile, writing a new overlay version
+(`result: callers_reverted`); a global regression still reverts the whole overlay.
+
 **Blind spot: agentic traffic.** The gateway log strips tool calls, tool
 results and tool definitions. Tool turns are dropped from the replay and the
 sample is marked `agentic`; judges see only the text. So agentic requests are
@@ -203,6 +235,9 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_STATE_PATH` | `<overlay>.state.json` |
 | `PINBALL_OPT_MIN_SAMPLES` / `_SHRINK_K` / `_COST_WEIGHT` / `_SWAP_MARGIN` | `10` / `20` / `0.1` / `0.02` |
 | `PINBALL_OPT_MAX_MOVES` / `_AGENTIC_SHARE_HIGH` / `_AGENTIC_MAX_MOVES` | `2` / `0.5` / `1` |
+| `PINBALL_OPT_CALLER_MIN_SAMPLES` / `_PER_TIER` / `_SHRINK_K` | `30` / `15` / `30` |
+| `PINBALL_OPT_CALLER_MAX_PROFILES` / `_MAX_CHANGES` / `_STALE_DAYS` | `20` / `5` / `14` |
+| `PINBALL_OPT_CALLER_LIGHT_FAIL_GAP` / `_REVERT_MIN_REQUESTS` | `0.15` / `20` |
 | `PINBALL_OPT_REVERT_HOURS` / `_ERROR_MARGIN` / `_ERROR_FLOOR` / `_COST_MARGIN` / `_MIN_REQUESTS` | `6` / `0.5` / `0.01` / `0.25` / `50` |
 
 CronJob note: build the image with `uv sync --locked --no-dev --extra optimize`

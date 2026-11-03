@@ -36,6 +36,7 @@ class Sample:
     # In memory only; excluded from repr and from record().
     messages: tuple[dict[str, str], ...] = field(repr=False)
     served_text: str = field(repr=False)
+    caller: str = ""  # x-agw-caller as logged (request_logs.agentgateway_user, <= 64 chars)
 
     def record(self) -> dict[str, Any]:
         """Content-free description for reports."""
@@ -46,6 +47,7 @@ class Sample:
             "pinball_model": self.pinball_model,
             "served_model": self.served_model,
             "agentic": self.agentic,
+            "caller": self.caller,
             "n_turns": len(self.messages),
         }
 
@@ -108,27 +110,39 @@ def normalize_payload(row: dict[str, Any]) -> Sample | None:
         served_output_tokens=_int(row.get("output_tokens")),
         messages=tuple(turns),
         served_text=served,
+        caller=str(row.get("caller") or "")[:64],
     )
 
 
-def draw_samples(db: ReplayDb, days: int, per_tier: int, seed: int) -> list[Sample]:
+def take(db: ReplayDb, ids: list[str], quota: int) -> list[Sample]:
+    """The first `quota` replayable rows of `ids`, fetched in chunks of `quota`."""
+    kept: list[Sample] = []
+    for start in range(0, len(ids), max(quota, 1)):
+        if len(kept) >= quota:
+            break
+        chunk = ids[start : start + quota]
+        fetched = {str(r["id"]): r for r in db.payloads(chunk)}
+        for log_id in chunk:
+            sample = normalize_payload(fetched[log_id]) if log_id in fetched else None
+            if sample is not None and len(kept) < quota:
+                kept.append(sample)
+    return kept
+
+
+def draw_samples(
+    db: ReplayDb,
+    days: int,
+    per_tier: int,
+    seed: int,
+    pool: list[dict[str, Any]] | None = None,
+) -> list[Sample]:
     """Per tier: seeded shuffle of the pool, keep the first `per_tier` replayable rows."""
     by_tier: dict[str, list[str]] = defaultdict(list)
-    for row in db.pool(days):
+    for row in db.pool(days) if pool is None else pool:
         by_tier[str(row["tier"])].append(str(row["id"]))
     samples: list[Sample] = []
     for tier in TIERS:
         ids = sorted(by_tier.get(tier, []))
         random.Random(f"{seed}:{tier}").shuffle(ids)
-        kept: list[Sample] = []
-        for start in range(0, len(ids), max(per_tier, 1)):
-            if len(kept) >= per_tier:
-                break
-            chunk = ids[start : start + per_tier]
-            fetched = {str(r["id"]): r for r in db.payloads(chunk)}
-            for log_id in chunk:
-                sample = normalize_payload(fetched[log_id]) if log_id in fetched else None
-                if sample is not None and len(kept) < per_tier:
-                    kept.append(sample)
-        samples.extend(kept)
+        samples.extend(take(db, ids, per_tier))
     return samples

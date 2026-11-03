@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
@@ -31,6 +31,16 @@ from pinball.optimize.apply import (
     overlay_doc,
     save_state,
     write_overlay,
+)
+from pinball.optimize.caller_settings import CallerSettings, caller_settings_from_env
+from pinball.optimize.callers import Policy, draw_caller_samples
+from pinball.optimize.callers_run import (
+    NightInput,
+    RevertCtx,
+    learn_night,
+    revert_callers,
+    save_night,
+    with_callers,
 )
 from pinball.optimize.db import TIERS, PostgresDb, ReplayDb
 from pinball.optimize.gateway import Budget, Gateway, HttpGateway
@@ -66,6 +76,7 @@ class Deps:
     gateway: Gateway | None  # None: building one is forbidden (dry-run)
     now: datetime
     out: TextIO
+    callers: CallerSettings = field(default_factory=CallerSettings)
 
 
 def _base(settings: Settings) -> Config:
@@ -86,10 +97,12 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     live = live_overlay(settings.overlay_path)
     order = _current_order(base, live)
     seed = args.seed if args.seed is not None else int(f"{deps.now:%Y%m%d}")
-    samples = draw_samples(deps.db, args.days, args.per_tier, seed)
+    pool = deps.db.pool(args.days)
+    samples = draw_samples(deps.db, args.days, args.per_tier, seed, pool)
+    extra = draw_caller_samples(deps.db, pool, samples, seed, deps.callers)
     only = frozenset(c for c in args.candidates.split(",") if c) or None
     plan = make_plan(
-        samples, order, settings.judges, seed, only, model_prefix=settings.model_prefix
+        samples + extra, order, settings.judges, seed, only, model_prefix=settings.model_prefix
     )
     budget = Budget(settings.budget_usd, settings.prices)
     projected, fitting = projected_cost(plan, budget)
@@ -97,6 +110,7 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
         "seed": seed,
         "samples": len(samples),
         "per_tier": {t: sum(s.tier == t for s in samples) for t in TIERS},
+        "caller_samples": len(extra),
         "agentic_share": {t: round(agentic_share(samples, t), 4) for t in TIERS},
         "candidate_calls": plan.candidate_calls,
         "judge_calls": plan.judge_calls,
@@ -111,7 +125,8 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     if deps.gateway is None:
         raise SystemExit("gateway required for a real run")
     results = run_replay(plan, deps.gateway, budget, settings.workers)
-    evidence = collect(results, samples, settings.prices)
+    global_ids = frozenset(s.log_id for s in samples)
+    evidence = collect([r for r in results if r.log_id in global_ids], samples, settings.prices)
     tiers = {
         t: rerank(t, order[t], evidence.get(t, {}), agentic_share(samples, t), settings.rank)
         for t in TIERS
@@ -128,18 +143,24 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
         "previous_version": live.version if live else "",
         "tiers": {t: r.record() for t, r in tiers.items()},
     }
-    changed = any(r.after != r.before for r in tiers.values())
+    night = NightInput(
+        pool, results, samples + extra, global_ids, {t: r.after for t, r in tiers.items()}
+    )
+    policy = Policy(settings.rank, deps.callers, settings.prices)
+    callers = learn_night(live, night, base, (policy, settings.overlay_path, deps.now))
+    entry["callers"] = callers.audit
+    changed = callers.changed or any(r.after != r.before for r in tiers.values())
     code = EXIT_OK
     if not changed:
         entry["result"] = "unchanged"
+        save_night(settings.overlay_path, callers)
     elif settings.overlay_path is None:
         entry["result"] = "no_overlay_path"
     else:
         seq, version = next_version(state, live, deps.now)
         try:
-            overlay = build_overlay(
-                base, live, {t: r.after for t, r in tiers.items()}, version, deps.now
-            )
+            overlay = build_overlay(base, live, night.order, version, deps.now)
+            overlay = with_callers(base, overlay, callers.profiles)
             write_overlay(settings.overlay_path, base, overlay)
         except OverlayRejected as e:
             entry["result"] = f"rejected {e.reason}"
@@ -154,6 +175,7 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
                     changed_at=deps.now.isoformat(),
                 ),
             )
+            save_night(settings.overlay_path, callers)
             entry["result"] = "written"
             entry["version"] = version
     append_audit(settings.audit_file, entry)
@@ -177,7 +199,18 @@ def check_revert(settings: Settings, deps: Deps) -> int:
         entry.update(decision.record())
         entry["version"] = live.version
         if not decision.revert:
-            entry["result"] = "kept"
+            ctx = RevertCtx(
+                _base(settings),
+                settings.overlay_path,
+                settings.state_file,
+                (settings.revert, deps.callers),
+            )
+            try:
+                entry.update(revert_callers(deps.db, live, state, deps.now, ctx))
+            except OverlayRejected as e:
+                entry["result"] = f"callers_rejected {e.reason}"
+            else:
+                entry["result"] = "callers_reverted" if entry["callers_reverted"] else "kept"
         else:
             base = _base(settings)
             if state.previous is None:
@@ -230,7 +263,8 @@ def main(
     gateway = None
     if real_run:
         gateway = (gateway_factory or _http_gateway)(settings)
-    deps = Deps(db, gateway, now or datetime.now(UTC), out or sys.stdout)
+    callers = caller_settings_from_env(os.environ if env is None else env)
+    deps = Deps(db, gateway, now or datetime.now(UTC), out or sys.stdout, callers)
     if args.check_revert:
         return check_revert(settings, deps)
     return nightly(settings, args, deps)
