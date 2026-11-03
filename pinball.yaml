@@ -1,0 +1,76 @@
+# pinball model pool and scoring.
+#
+# models: every Copilot chat model the gateway can reach for `auto`, keyed by
+# the id pinball returns (extauthz.model). prompt_tokens is Copilot's
+# max_prompt_tokens (GET https://api.githubcopilot.com/models,
+# capabilities.limits); vision is capabilities.supports.vision. Only models
+# that serve /chat/completions are listed: copilot-api does not translate to
+# the Responses API, so /responses-only models (gpt-5.x/6.x, grok, mai) 400.
+models:
+  claude-haiku-5.5:  {prompt_tokens: 100000, vision: true}
+  claude-haiku-4.5:  {prompt_tokens: 136000, vision: true}
+  claude-sonnet-5.5: {prompt_tokens: 200000, vision: true}
+  claude-sonnet-5:   {prompt_tokens: 200000, vision: true}
+  gemini-3.8-flash:  {prompt_tokens: 200000, vision: true}
+  claude-opus-5.5:   {prompt_tokens: 200000, vision: true}
+  claude-opus-5:     {prompt_tokens: 200000, vision: true}
+  claude-opus-4.8:   {prompt_tokens: 200000, vision: true}
+  claude-fable-5.1:  {prompt_tokens: 200000, vision: true}
+  claude-fable-5:    {prompt_tokens: 200000, vision: true}
+  gemini-4-argon:    {prompt_tokens: 200000, vision: true}
+  kimi-k3:           {prompt_tokens: 917504, vision: true}
+
+# Ordered preference per tier. The first model that fits the request (prompt
+# size, images) wins; when none in the tier fits, the next tier up is tried,
+# then the model with the largest prompt window in the pool.
+tiers:
+  light: [claude-haiku-5.5, claude-haiku-4.5]
+  standard: [claude-sonnet-5.5, claude-sonnet-5, gemini-3.8-flash]
+  heavy: [claude-opus-5.5, claude-fable-5.1, claude-opus-5, gemini-4-argon, kimi-k3]
+
+# score < standard -> light; score >= heavy -> heavy; otherwise standard.
+thresholds:
+  standard: 1
+  heavy: 3
+
+# Use at most this share of a model's prompt window (token counts are a
+# chars/3.5 estimate).
+headroom: 0.9
+
+# Matched case-insensitively on word boundaries in user-authored text only
+# (never tool output or system prompts). Each distinct heavy keyword is +1 (at
+# most +2 per message); any light keyword is -1.
+heavy_keywords:
+  - architecture
+  - architect
+  - refactor
+  - debug
+  - root cause
+  - race condition
+  - deadlock
+  - concurrency
+  - prove
+  - proof
+  - security
+  - vulnerability
+  - migrate
+  - migration
+  - optimize
+  - performance
+  - algorithm
+  - trade-off
+  - tradeoff
+  - distributed
+  - invariant
+  - investigate
+light_keywords:
+  - title
+  - summarize
+  - summary
+  - translate
+  - classify
+  - extract
+  - rephrase
+  - one word
+  - yes or no
+  - tl;dr

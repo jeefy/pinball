@@ -1,0 +1,10 @@
+# Allowlist: send only what the Dockerfile copies.
+*
+!LICENSE
+!README.md
+!pinball.yaml
+!pyproject.toml
+!src/
+!uv.lock
+**/__pycache__
+**/*.py[cod]

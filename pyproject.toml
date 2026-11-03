@@ -1,0 +1,87 @@
+[project]
+name = "pinball"
+version = "0.1.0"
+description = "Automatic model selection for agentgateway, as an HTTP ext_authz service"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Jeffrey Sica" }]
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: Proxy Servers",
+]
+dependencies = [
+    "fastapi>=0.115",
+    "orjson>=3.10",
+    "prometheus-client>=0.20",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "uvicorn>=0.32",
+]
+
+[project.urls]
+Homepage = "https://github.com/jeefy/pinball"
+Source = "https://github.com/jeefy/pinball"
+Issues = "https://github.com/jeefy/pinball/issues"
+
+[project.scripts]
+pinball = "pinball.main:main"
+
+[dependency-groups]
+dev = [
+    "httpx2>=0.1",
+    "pyright>=1.1.390",
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pinball"]
+
+# pinball.yaml lives at the repository root; ship it inside the package so
+# pinball.config finds it next to the module in an installed wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"pinball.yaml" = "pinball/pinball.yaml"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "scripts/",
+    "examples/",
+    "pinball.yaml",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+# yaml resolves to pyright's bundled types-PyYAML stubs.
+reportMissingModuleSource = false
+
+[tool.coverage.run]
+source = ["pinball"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

@@ -1,0 +1,92 @@
+# agentgateway v1.6.0: route `model: auto` through pinball.
+#
+# Clients send `model: auto`. llm.policies.extAuthz POSTs the buffered body to
+# pinball, which answers 200 with {"model", "tier", "reason", ...}; the
+# `metadata` CEL copies those into `extauthz.*`, and the `auto` virtual model
+# picks the pinball-* target whose `when` matches. Anything else (pinball
+# down or slow past the 2 s ext_authz timeout, an unreadable body, a model
+# id with no target) lands on the last target. Clients cannot steer the
+# choice: routing reads extauthz.* only, and the pinball-* models are
+# internal (404 when requested directly).
+#
+# Every model in pinball.yaml needs a target here (tests/test_example.py
+# checks it). scripts/twin.sh runs this file against a stub upstream.
+frontendPolicies:
+  http:
+    # The whole body is buffered for ext_authz; agent requests run to MiBs.
+    maxBufferSize: 16777216
+  accessLog:
+    add:
+      pinball.model: 'default(extauthz.model, null)'
+      pinball.tier: 'default(extauthz.tier, null)'
+      pinball.reason: 'default(extauthz.reason, null)'
+
+llm:
+  port: 4000
+  discovery: disabled
+  providers:
+    # Completions only: /v1/messages and /v1/responses requests are translated
+    # to chat completions, the one API copilot-api serves. `path` is absolute
+    # (it replaces the baseUrl path).
+    - name: copilot-completions
+      provider:
+        custom:
+          formats:
+            - {type: completions, path: /v1/chat/completions}
+      params:
+        baseUrl: http://copilot-api:4141/v1
+        apiKey: unused
+  models:
+    - {name: pinball-claude-haiku-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-5.5}}
+    - {name: pinball-claude-haiku-4.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-4.5}}
+    - {name: pinball-claude-sonnet-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5.5}}
+    - {name: pinball-claude-sonnet-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5}}
+    - {name: pinball-gemini-3.8-flash, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-3.8-flash}}
+    - {name: pinball-claude-opus-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5.5}}
+    - {name: pinball-claude-opus-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5}}
+    - {name: pinball-claude-opus-4.8, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-4.8}}
+    - {name: pinball-claude-fable-5.1, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5.1}}
+    - {name: pinball-claude-fable-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5}}
+    - {name: pinball-gemini-4-argon, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-4-argon}}
+    - {name: pinball-kimi-k3, visibility: internal, provider: {reference: copilot-completions}, params: {model: kimi-k3}}
+  virtualModels:
+    - name: auto
+      routing:
+        conditional:
+          # First match wins; only the final fallback omits `when`.
+          targets:
+            - {when: 'default(extauthz.model, "") == "claude-haiku-5.5"', model: pinball-claude-haiku-5.5}
+            - {when: 'default(extauthz.model, "") == "claude-haiku-4.5"', model: pinball-claude-haiku-4.5}
+            - {when: 'default(extauthz.model, "") == "claude-sonnet-5.5"', model: pinball-claude-sonnet-5.5}
+            - {when: 'default(extauthz.model, "") == "claude-sonnet-5"', model: pinball-claude-sonnet-5}
+            - {when: 'default(extauthz.model, "") == "gemini-3.8-flash"', model: pinball-gemini-3.8-flash}
+            - {when: 'default(extauthz.model, "") == "claude-opus-5.5"', model: pinball-claude-opus-5.5}
+            - {when: 'default(extauthz.model, "") == "claude-opus-5"', model: pinball-claude-opus-5}
+            - {when: 'default(extauthz.model, "") == "claude-opus-4.8"', model: pinball-claude-opus-4.8}
+            - {when: 'default(extauthz.model, "") == "claude-fable-5.1"', model: pinball-claude-fable-5.1}
+            - {when: 'default(extauthz.model, "") == "claude-fable-5"', model: pinball-claude-fable-5}
+            - {when: 'default(extauthz.model, "") == "gemini-4-argon"', model: pinball-gemini-4-argon}
+            - {when: 'default(extauthz.model, "") == "kimi-k3"', model: pinball-kimi-k3}
+            - {model: pinball-claude-sonnet-5.5}
+  policies:
+    extAuthz:
+      conditional:
+        # Only `auto` requests pay for the check. The body is already
+        # buffered when the condition runs; a non-JSON body never matches.
+        - condition: 'json(request.body).model == "auto"'
+          host: pinball:9201
+          # Fail open: the default (deny) would answer 403 when pinball is
+          # unreachable. pinball itself always answers 200.
+          failureMode: allow
+          includeRequestBody: {maxRequestBytes: 16777216}
+          includeRequestHeaders: [content-type, x-pinball-tier, x-agw-caller]
+          protocol:
+            http:
+              path: '"/check"'
+              # Logged by pinball (listener=) for per-consumer analysis.
+              addRequestHeaders:
+                x-pinball-listener: 'string(destination.port)'
+              metadata:
+                model: 'json(response.body).model'
+                tier: 'json(response.body).tier'
+                reason: 'json(response.body).reason'
