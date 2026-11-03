@@ -1,6 +1,7 @@
 """`pinball-optimize`: nightly re-ranking, dry-run and revert check.
 
   pinball-optimize run [--dry-run] [--seed N] [--per-tier N] [--days N] [--candidates a,b]
+  pinball-optimize discover [--dry-run]      new-model PRs only (README "New models")
   pinball-optimize --check-revert
   python -m pinball.optimize ...
 
@@ -16,7 +17,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
@@ -32,6 +33,7 @@ from pinball.optimize.apply import (
     save_state,
     write_overlay,
 )
+from pinball.optimize.bot import Bot
 from pinball.optimize.caller_settings import CallerSettings, caller_settings_from_env
 from pinball.optimize.callers import Policy, draw_caller_samples
 from pinball.optimize.callers_run import (
@@ -43,12 +45,20 @@ from pinball.optimize.callers_run import (
     with_callers,
 )
 from pinball.optimize.db import TIERS, PostgresDb, ReplayDb
+from pinball.optimize.discovery_cli import (
+    DiscoveryEnv,
+    after_ranking,
+    discover,
+    discovery_env,
+    make_bot,
+    night_pass,
+)
 from pinball.optimize.gateway import Budget, Gateway, HttpGateway
 from pinball.optimize.rank import agentic_share, collect, rerank
 from pinball.optimize.replay import make_plan, projected_cost
 from pinball.optimize.report import outcome_counts
 from pinball.optimize.revert import check
-from pinball.optimize.sample import draw_samples
+from pinball.optimize.sample import Sample, draw_samples
 from pinball.optimize.schedule import Limits, run_replay
 from pinball.optimize.settings import Settings, settings_from_env
 from pinball.overlay import Overlay, OverlayRejected, merge
@@ -62,7 +72,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="pinball-optimize", description="Nightly within-tier re-ranking for pinball."
     )
-    p.add_argument("command", nargs="?", default="run", choices=["run"])
+    p.add_argument("command", nargs="?", default="run", choices=["run", "discover"])
     p.add_argument("--dry-run", action="store_true", help="sample and plan; call no model")
     p.add_argument("--check-revert", action="store_true", help="revert a regressing overlay")
     p.add_argument("--seed", type=int, default=None, help="default: today's date as YYYYMMDD")
@@ -79,6 +89,9 @@ class Deps:
     now: datetime
     out: TextIO
     callers: CallerSettings = field(default_factory=CallerSettings)
+    discovery: DiscoveryEnv | None = None
+    bot_factory: Callable[[DiscoveryEnv], Bot] = make_bot
+    catalog: Callable[[], Any] | None = None
 
 
 def _base(settings: Settings) -> Config:
@@ -123,7 +136,7 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     }
     if args.dry_run:
         print(json.dumps({"dry_run": True, **summary}, indent=2), file=deps.out)
-        return EXIT_OK
+        return new_models(settings, deps, (samples, order), seed)
     if deps.gateway is None:
         raise SystemExit("gateway required for a real run")
     limits = Limits(settings.workers, settings.pair_deadline, settings.tier_weights)
@@ -187,7 +200,21 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
             entry["version"] = version
     append_audit(settings.audit_file, entry)
     print(json.dumps(entry, indent=2), file=deps.out)
-    return code
+    return new_models(settings, deps, (samples, order), seed) or code
+
+
+def new_models(
+    settings: Settings,
+    deps: Deps,
+    ranked: tuple[list[Sample], dict[str, tuple[str, ...]]],
+    seed: int,
+) -> int:
+    """After ranking; isolated, so it changes the exit code only when configured strict."""
+    if deps.discovery is None:
+        return EXIT_OK
+    night = night_pass(settings, deps.discovery, deps.now, deps.catalog)
+    night = replace(night, seed=seed, samples=ranked[0], order=ranked[1], gateway=deps.gateway)
+    return after_ranking(deps.discovery, night, deps.out, deps.bot_factory)
 
 
 def check_revert(settings: Settings, deps: Deps) -> int:
@@ -252,13 +279,20 @@ def main(
     gateway_factory: Callable[[Settings], Gateway] | None = None,
     now: datetime | None = None,
     out: TextIO | None = None,
+    bot_factory: Callable[[DiscoveryEnv], Bot] = make_bot,
+    catalog: Callable[[], Any] | None = None,
 ) -> int:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     args = parse_args(argv)
-    settings = settings_from_env(os.environ if env is None else env)
+    environ = os.environ if env is None else env
+    settings = settings_from_env(environ)
+    discovery = discovery_env(environ, args.dry_run)
+    if args.command == "discover":
+        night = night_pass(settings, discovery, now or datetime.now(UTC), catalog)
+        return discover(discovery, night, out or sys.stdout, bot_factory)
     if not settings.db_dsn:
         print("PINBALL_OPT_DB_DSN is required", file=sys.stderr)
         return EXIT_CONFIG
@@ -270,8 +304,16 @@ def main(
     gateway = None
     if real_run:
         gateway = (gateway_factory or _http_gateway)(settings)
-    callers = caller_settings_from_env(os.environ if env is None else env)
-    deps = Deps(db, gateway, now or datetime.now(UTC), out or sys.stdout, callers)
+    deps = Deps(
+        db,
+        gateway,
+        now or datetime.now(UTC),
+        out or sys.stdout,
+        caller_settings_from_env(environ),
+        discovery,
+        bot_factory,
+        catalog,
+    )
     if args.check_revert:
         return check_revert(settings, deps)
     return nightly(settings, args, deps)

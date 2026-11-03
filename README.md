@@ -258,6 +258,52 @@ and use `command: ["pinball-optimize", "run"]` (nightly) plus
 `["pinball-optimize", "--check-revert"]` (a few hours later), sharing the
 overlay volume with pinball.
 
+## New models
+
+The nightly `run` (and `pinball-optimize discover [--dry-run]`) also looks for
+new Copilot models and wires winners into the pool through bot PRs on the
+deployment repo (agentgateway cannot route to a model chosen at runtime, so
+every pool model needs literal gateway config). Two steps, both auto-merged:
+
+1. **Candidate PR** (`pinball-bot/candidate-<id>`): a chat model in
+   `PINBALL_OPT_MODELS_URL` (copilot-api `/v1/models`; embeddings, dated
+   snapshots and legacy GPT-3.5/4/4o ignored) that is not in the pool, the
+   candidate list or its `dropped` list gets ONLY a public `opt-<id>` gateway
+   alias and a `candidates` entry in `k8s/pinball-candidates.yaml`. Nothing
+   live changes.
+2. **Promotion PR** (`pinball-bot/promote-<id>`): on later nights every
+   candidate in the mounted list (`PINBALL_OPT_CANDIDATES`) is replayed on the
+   night's samples of every tier and judged against what the pool served.
+   It wins a tier when it has `PINBALL_OPT_MIN_SAMPLES` non-agentic agreed
+   comparisons and, scored as if appended last, beats the weakest incumbent
+   by the swap margin (largest gap wins). The PR adds it to `models`
+   (`prompt_tokens` = catalogue window capped at 250k, `vision` from the
+   catalogue; missing values default to 100k / false and are flagged in the
+   PR body), at the END of that tier, plus `pinball-<id>`, the `auto` target
+   and placeholder cost rates. The overlay may then move it up.
+   A candidate that won nothing after `PINBALL_OPT_CANDIDATE_NIGHTS` (7) is
+   dropped by a PR (`pinball-bot/drop-<id>`) that removes the alias.
+
+Safety: every edit is a line insertion/rewrite next to an anchor (comments
+untouched); before committing, the edited files must pass
+`optimize/invariants.py`, a copy of the deployment's pool drift test. The bot
+merges only after the PR head has a GREEN commit status (it does not rely on
+Gitea's merge-when-checks-succeed, which merges at once without branch
+protection); failed checks leave the PR open, pending ones are retried the
+next night, and PRs are serial (one unmerged PR blocks further ones). At most
+`PINBALL_OPT_MAX_PRS` (3) new PRs per night; an existing branch or PR for the
+same step is never duplicated. A discovery failure is logged and reported
+but never fails the ranking unless `PINBALL_OPT_DISCOVERY_STRICT=1`.
+
+| Variable | Default |
+|---|---|
+| `PINBALL_GITEA_TOKEN` | unset: the pass is skipped (never logged) |
+| `PINBALL_GITEA_URL` / `PINBALL_GITEA_REPO` | `https://gitea.grizzlygeek.net` / `jeefy/carrier` |
+| `PINBALL_OPT_MODELS_URL` | `http://copilot-api.carrier.svc.cluster.local:4141/v1/models` |
+| `PINBALL_OPT_CANDIDATES` | unset: no evaluation |
+| `PINBALL_OPT_CANDIDATE_BUDGET_USD` | `5.0` (separate from the ranking budget) |
+| `PINBALL_OPT_MERGE_WITHOUT_CHECKS` | off: a PR with no status is never merged |
+
 ## Running
 
 ```sh

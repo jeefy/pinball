@@ -1,0 +1,550 @@
+# Trimmed copy of carrier k8s/agentgateway.yaml (ConfigMap: config.modelCatalog,
+# llm.models, llm.virtualModels) for the carrier_edit/invariants tests.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentgateway-config
+  namespace: carrier
+  labels:
+    app.kubernetes.io/name: carrier
+    app.kubernetes.io/component: agentgateway
+    app.kubernetes.io/part-of: carrier
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+data:
+  # K8s-adapted copy of gateway/config.yaml: host.docker.internal endpoints
+  # rewritten to in-cluster DNS. See k8s/README.md for the mapping table.
+  config.yaml: |
+    config:
+      statsAddr: 0.0.0.0:15020
+      # OpenCode streams (Opus thinking turns) can run for minutes; let them
+      # finish on a terminating pod (terminationGracePeriodSeconds is 620).
+      connectionTerminationDeadline: 600s
+      # Request-log attribution (agentgateway-db request_logs + UI Groups/Users
+      # filters): group = the consumer, derived from the listener port; user =
+      # an optional X-AGW-Caller header for callers that share a listener.
+      standardAttributes:
+        group: 'default({3000: "default", 4001: "hermes", 4002: "opencode", 4003: "claude-code", 4004: "swarm", 4005: "frigate", 4006: "camera-memory", 4007: "n8n", 4008: "private-search", 4009: "voice", 4011: "deep-research", 4013: "opencode"}[destination.port], "unknown")'
+        user: 'default(request.headers["x-agw-caller"], "")'
+      # OTLP tracing (homelab Tempo + Phoenix via Alloy, 2026-10-31). Only the
+      # voice listener (:4009) is sampled: its callers (voice-brain) send a
+      # sampled traceparent, and the prompt/completion attributes stay off the
+      # huge opencode/claude-code prompts. Export is async and fail-open.
+      # OpenInference attributes make the span an LLM span in Phoenix.
+      tracing:
+        otlpEndpoint: http://alloy.monitoring.svc:4317
+        otlpProtocol: grpc
+        randomSampling: 'false'  # only turns voice-brain sampled (traceparent); no warm-up roots
+        clientSampling: 'destination.port == 4009'
+        fields:
+          add:
+            openinference.span.kind: '"LLM"'
+            llm.system: 'llm.provider'
+            llm.model_name: 'llm.requestModel'
+            llm.input_messages: 'flattenRecursive(llm.prompt.map(c, {"message": c}))'
+            llm.output_messages: 'flattenRecursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
+            llm.token_count.completion: 'llm.outputTokens'
+            llm.token_count.prompt: 'llm.inputTokens'
+            llm.token_count.total: 'llm.totalTokens'
+      # request_logs.cost / agw.ai.usage.cost.*: the 1.6 built-in catalog only
+      # knows public OpenAI names, so every Copilot model logged NULL. Rates are
+      # the vendor's public API list price (USD per 1M tokens, 2026-10-26) as a
+      # what-it-would-have-cost proxy - Copilot itself is subscription-billed.
+      # Keyed by provider identity: `openai` for the copilot-proxy openAI-type
+      # provider, `github-copilot` for the :4013 passthrough (providerOverride).
+      # Money values must be strings. Local backends are 0 so cost is never NULL.
+      modelCatalog:
+        - inline:
+            providers:
+              openai:
+                models:
+                  kimi-k3:          {rates: {input: "3.00", output: "15.00", cacheRead: "0.30", cacheWrite: "3.00"}}
+                  claude-sonnet-5:  {rates: {input: "2.00", output: "10.00", cacheRead: "0.20", cacheWrite: "2.50"}}
+                  claude-opus-5:    {rates: {input: "5.00", output: "25.00", cacheRead: "0.50", cacheWrite: "6.25"}}
+                  claude-fable-5:   {rates: {input: "10.00", output: "50.00", cacheRead: "1.00", cacheWrite: "12.50"}}
+                  claude-haiku-4.5: {rates: {input: "1.00", output: "5.00", cacheRead: "0.10", cacheWrite: "1.25"}}
+                  claude-haiku-5.5: {rates: {input: "0.10", output: "0.50", cacheRead: "0.01", cacheWrite: "0.125"}}
+                  claude-sonnet-5.5: {rates: {input: "2.00", output: "10.00", cacheRead: "0.10", cacheWrite: "2.50"}}
+                  # pinball-only models (`auto`), from GitHub's Copilot
+                  # per-token table (docs.github.com .../copilot-billing/
+                  # models-and-pricing, 2026-11-02). Gemini rates are promo
+                  # prices: 3.8 Flash until 2026-12-31, 4 Argon until 2026-12-01.
+                  claude-opus-5.5:  {rates: {input: "4.00", output: "20.00", cacheRead: "0.20", cacheWrite: "5.00"}}
+                  claude-opus-4.8:  {rates: {input: "5.00", output: "25.00", cacheRead: "0.50", cacheWrite: "6.25"}}
+                  claude-fable-5.1: {rates: {input: "10.00", output: "50.00", cacheRead: "0.25", cacheWrite: "12.50"}}
+                  gemini-3.8-flash: {rates: {input: "0.75", output: "3.75", cacheRead: "0.075"}}
+                  gemini-4-argon:   {rates: {input: "2.00", output: "10.00", cacheRead: "0.10"}}
+                  gpt-5.6-sol:      {rates: {input: "4.00", output: "20.00", cacheRead: "0.40", cacheWrite: "5.00"}}
+                  gpt-5-mini:       {rates: {input: "0.25", output: "2.00", cacheRead: "0.025"}}
+                  gpt-4.1:          {rates: {input: "2.00", output: "8.00", cacheRead: "0.50"}}
+                  gpt-4o-mini:      {rates: {input: "0.15", output: "0.60", cacheRead: "0.075"}}
+                  voice:            {rates: {input: "0", output: "0"}}
+                  bge-base-en-v1.5: {rates: {input: "0", output: "0"}}
+              github-copilot:
+                models:
+                  claude-opus-5.5:   {rates: {input: "4.00", output: "20.00", cacheRead: "0.20", cacheWrite: "5.00"}}
+                  claude-sonnet-5.5: {rates: {input: "2.00", output: "10.00", cacheRead: "0.10", cacheWrite: "2.50"}}
+                  claude-fable-5.1:  {rates: {input: "10.00", output: "50.00", cacheRead: "0.25", cacheWrite: "12.50"}}
+                  claude-haiku-5.5:  {rates: {input: "0.10", output: "0.50", cacheRead: "0.01", cacheWrite: "0.125"}}
+                  kimi-k3:           {rates: {input: "3.00", output: "15.00", cacheRead: "0.30", cacheWrite: "3.00"}}
+                  gpt-6-astra:       {rates: {input: "10.00", output: "50.00", cacheRead: "1.00", cacheWrite: "12.50"}}
+                  gpt-6-sol:         {rates: {input: "2.00", output: "10.00", cacheRead: "0.20", cacheWrite: "2.50"}}
+                  gpt-6-luna:        {rates: {input: "0.10", output: "0.50", cacheRead: "0.01", cacheWrite: "0.125"}}
+                  gpt-6.1-sol:       {rates: {input: "2.00", output: "10.00", cacheRead: "0.10", cacheWrite: "2.50"}}
+                  gpt-6.1-terra:     {rates: {input: "1.00", output: "5.00", cacheRead: "0.05", cacheWrite: "1.25"}}
+                  gpt-5-mini:        {rates: {input: "0.25", output: "2.00", cacheRead: "0.025"}}
+                  gpt-4.1:           {rates: {input: "2.00", output: "8.00", cacheRead: "0.50"}}
+              ollama:
+                models:
+                  qwen3vl-it:4b:    {rates: {input: "0", output: "0"}}
+
+    # Store prompts and completions with each request log so the UI Logs page
+    # can show the conversation (request_log_payloads). Only takes effect when
+    # the render-config init container enabled config.logging.database.
+    # Payloads are pruned after 14 days (agentgateway-db-prune), metadata
+    # after 180.
+    llm:
+      gateways: [default, hermes, opencode, claude-code, swarm, frigate, camera-memory, n8n, private-search, voice, deep-research]
+      # 1.6: /v1/models would otherwise expand the `*` wildcard into the
+      # built-in catalog; keep listing the 15 configured names.
+      discovery: disabled
+      # 1.6: a provider baseUrl is the complete base path (1.4/1.5 forwarded the
+      # client's /v1/... path for openAI providers), hence the explicit /v1.
+      # These are openAI-type providers in front of non-OpenAI servers: fine
+      # for the OpenAI-format callers they have today, but an Anthropic
+      # Messages request to one of their aliases would be converted to the
+      # Responses format, which Copilot serves only for its /responses-only
+      # models (GPT-5.x/6.x, grok, mai); Claude/Gemini would 400. Keep
+      # Anthropic-format clients on `*`/anthropic-direct or :4013.
+      providers:
+        - name: copilot-proxy
+          provider: openAI
+          params:
+            baseUrl: http://copilot-api.carrier.svc.cluster.local:4141/v1
+            apiKey: dummy
+        # kimi-k3-copilot only: same copilot-api, reached through the
+        # kimi-k3-timeout loopback listener (:4014, routes below) so a 60 s
+        # time-to-response-headers bound applies to this one model. 1.6 has
+        # no per-model/provider timeout and llm.policies.timeout is global.
+        - name: copilot-proxy-kimi
+          provider: openAI
+          params:
+            baseUrl: http://127.0.0.1:4014/v1
+            apiKey: dummy
+        # pinball (`auto`, k8s/pinball.yaml): the same two copilot-api paths as
+        # custom providers that declare chat completions only, so /v1/messages
+        # and /v1/responses requests for `auto` are translated to the one API
+        # copilot-api serves (an openAI provider would forward Responses: 404).
+        # `path` is absolute; it replaces the baseUrl path. providerOverride
+        # keeps the `openai` cost-catalog identity of copilot-proxy.
+        - name: copilot-completions
+          provider:
+            custom:
+              providerOverride: openai
+              formats:
+                - {type: completions, path: /v1/chat/completions}
+          params:
+            baseUrl: http://copilot-api.carrier.svc.cluster.local:4141/v1
+            apiKey: dummy
+        - name: copilot-completions-kimi
+          provider:
+            custom:
+              providerOverride: openai
+              formats:
+                - {type: completions, path: /v1/chat/completions}
+          params:
+            baseUrl: http://127.0.0.1:4014/v1
+            apiKey: dummy
+        - name: anthropic-direct
+          provider: anthropic
+          params: {}
+        - name: ollama-local
+          provider: ollama
+          params:
+            # 2026-10-17: carrier-local Service for the FLM host (k8s/flm-upstream.yaml);
+            # the ollama/ollama Service + LoadBalancer are gone so this gateway is
+            # the only in-cluster path to the NPU.
+            # 2026-11-01: :11434 is the realtime lane of homelab
+            # host-services/flm_scheduler.py, which sits in front of FLM.
+            hostOverride: flm.carrier.svc.cluster.local:11434
+        # 2026-11-01: batch lane of the same scheduler (model npu-batch).
+        # Waits behind every realtime request and is preempted by them; a
+        # request that waits > 90 s is answered by Copilot haiku-5.5.
+        - name: ollama-batch
+          provider: ollama
+          params:
+            hostOverride: flm.carrier.svc.cluster.local:11435
+        # 2026-10-17: voice-brain's llama-server (homelab voice ns, single slot,
+        # qwen3.5-9b). OpenAI-compatible; llama-server fields (timings,
+        # cache_prompt, reasoning_effort) pass through unchanged.
+        - name: llama-server
+          provider: openAI
+          params:
+            baseUrl: http://llama-server.voice.svc.cluster.local:8080/v1
+            apiKey: dummy
+        # 2026-10-17: cluster TEI (homelab embeddings ns, BAAI/bge-base-en-v1.5,
+        # CPU). OpenAI-compatible /v1/embeddings; TEI ignores the model name.
+        - name: tei-embeddings
+          provider: openAI
+          params:
+            baseUrl: http://tei-embeddings.embeddings.svc.cluster.local:8080/v1
+            apiKey: dummy
+      models:
+        - name: review-tier
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-sonnet-5
+          # 2026-11-01: 1h prompt cache. The hourly harvester read its 13.8K
+          # cached system prompt on 97/97 calls < 5 min apart and 0/39 after
+          # longer gaps. Copilot honours copilot_cache_control ttl "1h" via
+          # copilot-api (probe: 21,614 cached tokens read back after 7.5 min).
+          # Only messages the caller already marked are upgraded.
+          transformation:
+            messages: 'llmRequest.messages.map(m, "copilot_cache_control" in m ? m.merge({"copilot_cache_control": {"type": "ephemeral", "ttl": "1h"}}) : m)'
+        - name: triage-tier
+          provider:
+            reference: copilot-proxy
+          params:
+            model: gpt-5-mini
+        - name: eval-judge
+          provider:
+            reference: copilot-proxy
+          params:
+            model: gpt-5-mini
+        # 2026-11-02: model-efficacy judges (hermes-automation
+        # scripts/e2e_eval/eval_research.py, later the pinball eval loop).
+        # Two families so a verdict counts only when both agree and neither
+        # grades its own family alone. Separate from eval-judge, which stays
+        # pinned so carrier gate scores remain comparable.
+        - name: judge-opus
+          provider:
+            reference: copilot-completions
+          params:
+            model: claude-opus-5.5
+        - name: judge-argon
+          provider:
+            reference: copilot-completions
+          params:
+            model: gemini-4-argon
+        # Phase 3 consumer routes. Semantic names where the backing model is a
+        # policy decision (hermes-delegation); literal names where the client
+        # picks the model itself (gpt-5.6-sol = Hermes main pre-migration,
+        # gemma4:e2b = Hermes aux on cluster ollama).
+        - name: gpt-5.6-sol
+          provider:
+            reference: copilot-proxy
+          params:
+            model: gpt-5.6-sol
+        # hermes-delegation: virtual model (llm.virtualModels), same targets as
+        # kimi-k3. 2026-08-06: claude-sonnet-5 -> kimi-k3 (Hermes model migration).
+        # 2026-08-06: Hermes main moved opus-5 -> kimi-k3. 2026-10-26: kimi-k3 and
+        # hermes-delegation became virtual models (llm.virtualModels below):
+        # Copilot's kimi-k3 upstream returned "upstream model provider is
+        # currently experiencing high demand" 25x on 10-25 and reset
+        # connections on 10-26, surfacing as bare 503s with no retry path
+        # (the llm front door has no retry policy in 1.6; only health
+        # eviction + failover). Hermes' OpenAI-format tool history is valid
+        # on claude-sonnet-5.5 (tool_calls verified via copilot-api).
+        # Hermes sends max_tokens 65536 on every turn (7-day max actually
+        # produced: 8,984). 16384 bounds a runaway tool loop; the same cap on
+        # the fallback keeps the two targets interchangeable.
+        - name: kimi-k3-copilot
+          visibility: internal
+          provider:
+            reference: copilot-proxy-kimi
+          params:
+            model: kimi-k3
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 16384), 16384)'
+          health:
+            unhealthyExpression: 'response.code >= 500 || response.code == 429'
+            eviction:
+              consecutiveFailures: 2
+              duration: 300s
+        - name: kimi-k3-fallback
+          visibility: internal
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-sonnet-5.5
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 16384), 16384)'
+        # Namespace rule: bare claude-* names are RESERVED for the real
+        # Anthropic API (wildcard entry below, enterprise auth passed
+        # through from the client). Copilot-shim consumers use the
+        # non-claude aliases (opus-5, sonnet-5, fable-5, haiku-4.5) so a
+        # Claude Code request can never silently land on the personal
+        # Copilot account, and vice versa.
+        - name: fable-5
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-fable-5
+        - name: haiku-4.5
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-haiku-4.5
+        - name: haiku-5.5
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-haiku-5.5
+        - name: sonnet-5
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-sonnet-5
+        - name: opus-5
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-opus-5
+        - name: "*"
+          provider:
+            reference: anthropic-direct
+        # aux-tier: Hermes auxiliary calls (title, compression, web_extract,
+        # session search). gemma4:e2b is the old literal name, kept identical
+        # until ~/.hermes/config.yaml points at aux-tier; delete it then.
+        - name: aux-tier
+          provider:
+            reference: copilot-proxy
+          params:
+            model: gpt-4o-mini
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 2000), 2000)'
+        - name: gemma4:e2b
+          provider:
+            reference: copilot-proxy
+          params:
+            # Entry name kept as gemma4:e2b so Hermes config is unchanged.
+            # 2026-10-17: off the NPU. Hermes compression/title/session-search
+            # (hundreds/day) queued behind Frigate/camera-memory on FastFlowLM;
+            # Hermes timing out of that queue triggers an FLM 0.9.46 crash
+            # ("double free" after a cancelled queued request; 34 crashes since
+            # 10-10) and 882 of 3,248 Hermes requests in 7 days were 503s.
+            # gpt-4o-mini on Copilot: Hermes main traffic is already on Copilot,
+            # so no new data leaves the house. Not gpt-5-mini: as a reasoning
+            # model it returned empty content for ~1 in 6 short title prompts.
+            model: gpt-4o-mini
+          # Title (7 tokens), compression and web_extract share this alias and
+          # none of them set max_tokens (web_extract sent 64000 on 2026-10-19).
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 2000), 2000)'
+
+        # 2026-10-26: Hermes memory (Hindsight fact extraction + structured
+        # retain JSON, ~450 calls/day) off the NPU. On FLM each extraction held
+        # the single slot for ~60 s (p95 109 s) and the 08:00-13:00 Hermes
+        # session burst is when FLM reset connections (100 x 503 in 4 days,
+        # every one of them during that window) and knocked Frigate/camera-
+        # memory onto the failover. The same prompts on Copilot gpt-4o-mini
+        # (via the failover) took 4 s. claude-haiku-5.5: non-reasoning (gpt-5
+        # mini-class models returned empty content on short prompts), valid
+        # JSON on the retain schema verified via copilot-api 2026-10-26.
+        # Hindsight: HINDSIGHT_API_LLM_MODEL=memory-tier.
+        - name: memory-tier
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-haiku-5.5
+          # Hindsight sends max_tokens 64000; extractions produce 350 tokens
+          # avg, 1,257 max. 7.3% of the FLM-era calls hit that backend's 800
+          # cap and returned truncated JSON, so this is set well above the max.
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 2000), 2000)'
+        # 2026-10-17: homelab NPU consumers (Frigate descriptions/chat, camera-memory
+        # captions, n8n ops workflows) ask for `npu`; the gateway pins it to the one
+        # resident FLM model so no caller can evict it with a different tag.
+        # `npu` itself is a virtual model (llm.virtualModels below): FLM first,
+        # npu-fallback (Copilot claude-haiku-5.5) when FLM is down or evicted.
+        - name: npu-flm
+          visibility: internal
+          provider:
+            reference: ollama-local
+          params:
+            model: qwen3vl-it:4b
+          # Single-slot backend at ~20 tok/s: 800 tokens is ~40 s, the most a
+          # caller can wait for without starving the camera pipeline. 2026-10-19
+          # Hermes web_extract sent max_tokens 64000 in bursts of 9/min and
+          # abandoned 203 requests at 120 s (Frigate p95 19 s -> 50 s). Keeps
+          # smaller client values (Frigate sends 100); fills in 800 when unset.
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 800), 800)'
+          # Outlier detection feeding the npu failover: 3 consecutive 5xx or
+          # connection failures (FLM crashed, laptop asleep, firewall) evict
+          # FLM for 2 minutes and every npu caller lands on Copilot meanwhile.
+          # The 3 probing requests themselves still get the 503 (verified on
+          # a local twin 2026-10-20). A busy FLM answers slowly but with 200,
+          # so it is never evicted.
+          health:
+            eviction:
+              consecutiveFailures: 3
+              duration: 120s
+        # 2026-10-26: gpt-4o-mini -> claude-haiku-5.5. Copilot's gpt-4o-mini
+        # rejects every image ("validating image item: image media type not
+        # supported", reproduced with PNG and JPEG), so all 80 Frigate/camera-
+        # memory failovers in 4 days were 400s after a 28-100 s wait - worse
+        # than the 503 they were failing over from. haiku-5.5 accepts images
+        # (verified via copilot-api 2026-10-26, as do gpt-4.1 and sonnet-5.5);
+        # gpt-4o, gpt-5.4-nano, gpt-6-luna and gpt-6.1-terra all 400 on images
+        # through copilot-api.
+        - name: npu-fallback
+          visibility: internal
+          provider:
+            reference: copilot-proxy
+          params:
+            model: claude-haiku-5.5
+        # 2026-11-01: same resident FLM model through the scheduler's batch
+        # lane, for long non-interactive work (n8n reports, Hermes
+        # web_extract, Hindsight). The scheduler, not the token cap, keeps it
+        # from starving the cameras, so the cap matches aux-tier (2000; n8n
+        # A2 asks for 1500 and was cut at 800). Own eviction state: a batch
+        # spill storm never evicts the realtime npu-flm.
+        - name: npu-batch-flm
+          visibility: internal
+          provider:
+            reference: ollama-batch
+          params:
+            model: qwen3vl-it:4b
+          transformation:
+            max_tokens: 'min(default(llmRequest.max_tokens, 2000), 2000)'
+          health:
+            eviction:
+              consecutiveFailures: 3
+              duration: 120s
+        # 2026-10-17: embeddings for camera-memory, private-search and
+        # gpt-researcher (/v1/embeddings). Any other model name on the
+        # embeddings path falls through to "*" (Anthropic), so callers must
+        # send exactly this name.
+        - name: bge-base-en-v1.5
+          provider:
+            reference: tei-embeddings
+          params:
+            model: bge-base-en-v1.5
+        # 2026-10-17: voice-brain Tier-2 (voice listener only by convention).
+        - name: voice
+          provider:
+            reference: llama-server
+          params:
+            model: voice
+        # pinball targets for `auto` (llm.virtualModels below). Internal: a
+        # client asking for pinball-* by name gets 404. One per model in
+        # k8s/pinball.yaml (packages/carrier_core/tests/test_pinball_pool.py).
+        # kimi-k3 goes through the 60 s loopback like kimi-k3-copilot.
+        - {name: pinball-claude-haiku-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-5.5}}
+        - {name: pinball-claude-haiku-4.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-4.5}}
+        - {name: pinball-claude-sonnet-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5.5}}
+        - {name: pinball-claude-sonnet-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5}}
+        - {name: pinball-gemini-3.8-flash, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-3.8-flash}}
+        - {name: pinball-claude-opus-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5.5}}
+        - {name: pinball-claude-opus-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5}}
+        - {name: pinball-claude-opus-4.8, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-4.8}}
+        - {name: pinball-claude-fable-5.1, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5.1}}
+        - {name: pinball-claude-fable-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5}}
+        - {name: pinball-gemini-4-argon, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-4-argon}}
+        - {name: pinball-kimi-k3, visibility: internal, provider: {reference: copilot-completions-kimi}, params: {model: kimi-k3}}
+        # pinball optimizer candidates (k8s/pinball-optimizer.yaml,
+        # PINBALL_OPT_MODEL_PREFIX=opt-): public twins of the pinball-<id>
+        # models, because bare claude-* is anthropic-direct (namespace rule
+        # above) and internal models 404 by name. 1.6 has no callable-but-
+        # unlisted visibility, so /v1/models lists them; clients should not
+        # pick them (no pinball routing, no tier). test_pinball_pool.py.
+        - {name: opt-claude-haiku-5.5, provider: {reference: copilot-completions}, params: {model: claude-haiku-5.5}}
+        - {name: opt-claude-haiku-4.5, provider: {reference: copilot-completions}, params: {model: claude-haiku-4.5}}
+        - {name: opt-claude-sonnet-5.5, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5.5}}
+        - {name: opt-claude-sonnet-5, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5}}
+        - {name: opt-gemini-3.8-flash, provider: {reference: copilot-completions}, params: {model: gemini-3.8-flash}}
+        - {name: opt-claude-opus-5.5, provider: {reference: copilot-completions}, params: {model: claude-opus-5.5}}
+        - {name: opt-claude-opus-5, provider: {reference: copilot-completions}, params: {model: claude-opus-5}}
+        - {name: opt-claude-opus-4.8, provider: {reference: copilot-completions}, params: {model: claude-opus-4.8}}
+        - {name: opt-claude-fable-5.1, provider: {reference: copilot-completions}, params: {model: claude-fable-5.1}}
+        - {name: opt-claude-fable-5, provider: {reference: copilot-completions}, params: {model: claude-fable-5}}
+        - {name: opt-gemini-4-argon, provider: {reference: copilot-completions}, params: {model: gemini-4-argon}}
+        - {name: opt-kimi-k3, provider: {reference: copilot-completions-kimi}, params: {model: kimi-k3}}
+        # 2026-11-03: the non-Claude Copilot models copilot-api can serve
+        # by their Copilot ids, so evals and clients can name them directly.
+        # GPT-5.x/6.x, grok-4.x and mai-code are /responses-only upstream;
+        # copilot-api p5 translates chat completions for them.
+        - {name: gemini-3.8-flash, provider: {reference: copilot-completions}, params: {model: gemini-3.8-flash}}
+        - {name: gemini-4-argon, provider: {reference: copilot-completions}, params: {model: gemini-4-argon}}
+        - {name: gpt-4.1, provider: {reference: copilot-completions}, params: {model: gpt-4.1}}
+        - {name: gpt-4o-mini, provider: {reference: copilot-completions}, params: {model: gpt-4o-mini}}
+        - {name: gpt-5.3-codex, provider: {reference: copilot-completions}, params: {model: gpt-5.3-codex}}
+        - {name: gpt-5.4-nano, provider: {reference: copilot-completions}, params: {model: gpt-5.4-nano}}
+        - {name: gpt-5.6-luna, provider: {reference: copilot-completions}, params: {model: gpt-5.6-luna}}
+        - {name: gpt-5.6-terra, provider: {reference: copilot-completions}, params: {model: gpt-5.6-terra}}
+        - {name: gpt-6-astra, provider: {reference: copilot-completions}, params: {model: gpt-6-astra}}
+        - {name: gpt-6-luna, provider: {reference: copilot-completions}, params: {model: gpt-6-luna}}
+        - {name: gpt-6-sol, provider: {reference: copilot-completions}, params: {model: gpt-6-sol}}
+        - {name: gpt-6.1-sol, provider: {reference: copilot-completions}, params: {model: gpt-6.1-sol}}
+        - {name: gpt-6.1-terra, provider: {reference: copilot-completions}, params: {model: gpt-6.1-terra}}
+        - {name: grok-4.6, provider: {reference: copilot-completions}, params: {model: grok-4.6}}
+        - {name: grok-4.7, provider: {reference: copilot-completions}, params: {model: grok-4.7}}
+        - {name: mai-code-1.1-flash, provider: {reference: copilot-completions}, params: {model: mai-code-1.1-flash}}
+      virtualModels:
+        # Frigate, camera-memory, n8n and the watchdog keep asking for `npu`.
+        # Priority 1 is the NPU; when npu-flm is evicted (see its health
+        # block) or missing, the request goes to Copilot claude-haiku-5.5, which
+        # also takes images. README: "native failover to FLM remains deferred"
+        # - this is it. Attribution is unchanged (gen_ai.request.model stays
+        # the resolved backend model; agw.ai.original_model stays npu).
+        - name: npu
+          routing:
+            failover:
+              targets:
+                - model: npu-flm
+                  priority: 1
+                - model: npu-fallback
+                  priority: 2
+        # 2026-11-01: batch lane of the NPU (see npu-batch-flm).
+        - name: npu-batch
+          routing:
+            failover:
+              targets:
+                - model: npu-batch-flm
+                  priority: 1
+                - model: npu-fallback
+                  priority: 2
+        - name: kimi-k3
+          routing:
+            failover:
+              targets:
+                - model: kimi-k3-copilot
+                  priority: 1
+                - model: kimi-k3-fallback
+                  priority: 2
+        - name: hermes-delegation
+          routing:
+            failover:
+              targets:
+                - model: kimi-k3-copilot
+                  priority: 1
+                - model: kimi-k3-fallback
+                  priority: 2
+        # 2026-11-02: pinball autopilot (k8s/pinball.yaml). llm.policies.extAuthz
+        # asks pinball for a model; `when` reads only extauthz.model, so the
+        # client cannot steer it. Anything unmatched (pinball down, slow past
+        # the 2 s ext_authz timeout, unknown id) takes the last target.
+        # 2026-11-03: `pinball` is the same router under its own name
+        # (OpenCode uses it); `auto` stays for Hermes and the evals. Both share
+        # one target list via the YAML anchor.
+        - name: auto
+          routing: &pinball_routing
+            conditional:
+              targets:
+                - {when: 'default(extauthz.model, "") == "claude-haiku-5.5"', model: pinball-claude-haiku-5.5}
+                - {when: 'default(extauthz.model, "") == "claude-haiku-4.5"', model: pinball-claude-haiku-4.5}
+                - {when: 'default(extauthz.model, "") == "claude-sonnet-5.5"', model: pinball-claude-sonnet-5.5}
+                - {when: 'default(extauthz.model, "") == "claude-sonnet-5"', model: pinball-claude-sonnet-5}
+                - {when: 'default(extauthz.model, "") == "gemini-3.8-flash"', model: pinball-gemini-3.8-flash}
+                - {when: 'default(extauthz.model, "") == "claude-opus-5.5"', model: pinball-claude-opus-5.5}
+                - {when: 'default(extauthz.model, "") == "claude-opus-5"', model: pinball-claude-opus-5}
+                - {when: 'default(extauthz.model, "") == "claude-opus-4.8"', model: pinball-claude-opus-4.8}
+                - {when: 'default(extauthz.model, "") == "claude-fable-5.1"', model: pinball-claude-fable-5.1}
+                - {when: 'default(extauthz.model, "") == "claude-fable-5"', model: pinball-claude-fable-5}
+                - {when: 'default(extauthz.model, "") == "gemini-4-argon"', model: pinball-gemini-4-argon}
+                - {when: 'default(extauthz.model, "") == "kimi-k3"', model: pinball-kimi-k3}
+                - {model: pinball-claude-sonnet-5.5}
+        - name: pinball
+          routing: *pinball_routing
