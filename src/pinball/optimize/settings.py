@@ -100,7 +100,7 @@ class Settings(BaseModel):
     db_dsn: str = ""
     gateway_url: str = ""
     gateway_timeout: float = Field(default=300.0, gt=0)
-    budget_usd: float = Field(default=10.0, ge=0)
+    budget_usd: float = Field(default=20.0, ge=0)
     overlay_path: Path | None = None
     config_path: Path | None = None
     audit_path: Path | None = None
@@ -108,6 +108,8 @@ class Settings(BaseModel):
     judges: tuple[str, ...] = DEFAULT_JUDGES
     model_prefix: str = ""  # candidates reach the gateway as <prefix><pool-id>
     workers: int = Field(default=4, ge=1)
+    pair_deadline: float = Field(default=180.0, gt=0)  # seconds per (sample, candidate)
+    tier_weights: dict[str, float] = {}  # budget share per tier; missing tier: 1.0
     prices: PriceTable = PriceTable()
     rank: RankSettings = RankSettings()
     revert: RevertSettings = RevertSettings()
@@ -152,6 +154,7 @@ _TOP_ENV: Final = {
     "PINBALL_OPT_STATE_PATH": "state_path",
     "PINBALL_OPT_WORKERS": "workers",
     "PINBALL_OPT_MODEL_PREFIX": "model_prefix",
+    "PINBALL_OPT_PAIR_DEADLINE": "pair_deadline",
 }
 
 
@@ -165,6 +168,9 @@ def settings_from_env(env: Mapping[str, str]) -> Settings:
     data["revert"] = RevertSettings.model_validate(_pick(env, _REVERT_ENV))
     if env.get("PINBALL_OPT_JUDGES"):
         data["judges"] = tuple(j for j in env["PINBALL_OPT_JUDGES"].split(",") if j)
+    if env.get("PINBALL_OPT_TIER_WEIGHTS"):  # light=1,standard=1,heavy=2
+        pairs = (w.partition("=") for w in env["PINBALL_OPT_TIER_WEIGHTS"].split(",") if w)
+        data["tier_weights"] = {t.strip(): v for t, _, v in pairs}
     prices = env.get("PINBALL_OPT_PRICES")
     data["prices"] = load_prices(Path(prices) if prices else None)
     return Settings.model_validate(data)

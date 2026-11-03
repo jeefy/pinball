@@ -135,6 +135,7 @@ psycopg); the serving image does not include it.
 pinball-optimize run --dry-run              # sample + plan + projected cost, no model calls
 pinball-optimize run --seed 20261103 --per-tier 20 --days 1 [--candidates a,b]
 pinball-optimize --check-revert             # run every few hours after `run`
+pinball-optimize discover [--dry-run]       # new-model PRs only (see "New models")
 ```
 
 Flow of one `run`:
@@ -160,13 +161,24 @@ Flow of one `run`:
    kept in the state file for revert.
 5. **Audit**: one JSON line per run/check (`PINBALL_OPT_AUDIT_PATH`): sample
    counts, agentic share, per-model n/quality/score/cost, moves and why,
-   spend, `budget_exhausted`, previous version. No prompt or response text is
-   ever persisted; judge reasons stay in memory.
+   spend, `budget_exhausted`, previous version, and outcome counts:
+   `budget_refused` (pairs never sent for lack of budget; not an error),
+   `errors` (real failures only), `gateway_errors` (candidate model → label:
+   `HTTP <status>`, `transport <type>`, `timeout`), `judge_unparseable` and
+   `judge_failed` per judge, and `tier_budget` (share and spend per tier).
+   No prompt, response or error-body text is ever persisted; judge reasons
+   stay in memory.
 
 **Spend cap.** Every gateway call first reserves its worst case (input
 tokens bounded at chars/2, output at `max_tokens`) at the model's price; a
-call that does not fit under `PINBALL_OPT_BUDGET_USD` (default $10) is never
-issued. After the call the reserve is replaced by the reported usage. The run
+call that does not fit under `PINBALL_OPT_BUDGET_USD` (default $20) is never
+issued. The cap is stratified: pairs go out round-robin over (tier, candidate),
+so every candidate gets a pair before any gets a second, and each tier with
+pairs gets a share of the cap by `PINBALL_OPT_TIER_WEIGHTS` (default equal). A
+tier cannot spend past its share while another tier has pairs left; a
+finished tier's leftover rolls over. A pair running longer than
+`PINBALL_OPT_PAIR_DEADLINE` is recorded as gateway error `timeout` and its
+worker slot is freed. After the call the reserve is replaced by the reported usage. The run
 finishes with whatever was judged and records `budget_exhausted: true`. The
 default price table (`settings.py`) holds **estimates**, not invoices; override
 it with `PINBALL_OPT_PRICES` (YAML `{models: {name: {input, output}}, default: {...}}`,
@@ -180,6 +192,38 @@ rises by more than `error_margin` relative and `error_floor` absolute, or
 cost per request rises by more than `cost_margin`, with at least
 `min_requests` in each window. Overlays not written by the optimizer are left alone.
 
+**Per-caller profiles.** The gateway stores the `x-agw-caller` header in
+`request_logs.agentgateway_user` (the column the `eval-*`/`pinball-*`
+exclusion already reads); the optimizer reads it cut to 64 chars, the same key
+pinball matches. On top of the global sample, every caller with at least
+`PINBALL_OPT_CALLER_MIN_SAMPLES` pool rows (busiest first, at most
+`_MAX_PROFILES`) gets up to `_CALLER_PER_TIER` extra samples per tier from rows
+the global sample did not take (seed `<seed>:<caller>:<tier>`). The global
+ranking only ever sees the global sample. For a caller with at least
+`_CALLER_MIN_SAMPLES` **judged non-agentic** samples (global + its own):
+
+- `tier_order`: the same rerank (margin, max moves, agentic cap) over that
+  caller's evidence, starting from tonight's global order; written only for
+  tiers whose order differs.
+- `weight = n / (n + PINBALL_OPT_CALLER_SHRINK_K)`.
+- `threshold_offsets.standard = -1` only when the caller's light-tier served
+  replies are judged unacceptable more often than the global light rate by
+  more than `_CALLER_LIGHT_FAIL_GAP` (with at least `PINBALL_OPT_MIN_SAMPLES`
+  light verdicts). Nothing else is ever learned; `heavy` stays 0.
+
+A caller below the minimum, or whose evidence matches global, gets no profile
+(it inherits global). Each profile is checked with `merge()` before the write
+(an invalid one is skipped and audited as `rejected <reason>`); at most
+`_CALLER_MAX_CHANGES` profiles are added or changed per night. A profile whose
+caller has not appeared in the pool for `_CALLER_STALE_DAYS` is dropped.
+Per-caller state (`last_seen`, `changed_at`, previous profile) lives in
+`<overlay>.callers.json`. The audit line's `callers` map carries counts,
+scores, moves and the result per caller, never text.
+`--check-revert` also compares each changed caller's own traffic over the same
+windows and margins (needs `_CALLER_REVERT_MIN_REQUESTS` per window) and
+restores only that caller's previous profile, writing a new overlay version
+(`result: callers_reverted`); a global regression still reverts the whole overlay.
+
 **Blind spot: agentic traffic.** The gateway log strips tool calls, tool
 results and tool definitions. Tool turns are dropped from the replay and the
 sample is marked `agentic`; judges see only the text. So agentic requests are
@@ -192,7 +236,9 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_DB_DSN` | required (read-only role recommended) |
 | `PINBALL_OPT_GATEWAY_URL` | required for `run` (not for dry-run/check) |
 | `PINBALL_OPT_GATEWAY_TIMEOUT` | `300` s |
-| `PINBALL_OPT_BUDGET_USD` | `10.0` |
+| `PINBALL_OPT_BUDGET_USD` | `20.0` |
+| `PINBALL_OPT_TIER_WEIGHTS` | equal (e.g. `light=1,standard=1,heavy=2`) |
+| `PINBALL_OPT_PAIR_DEADLINE` | `180` s per (sample, candidate) |
 | `PINBALL_OPT_PRICES` | built-in estimates |
 | `PINBALL_OPT_JUDGES` | `judge-opus,judge-argon` |
 | `PINBALL_OPT_WORKERS` | `4` |
@@ -203,12 +249,62 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_STATE_PATH` | `<overlay>.state.json` |
 | `PINBALL_OPT_MIN_SAMPLES` / `_SHRINK_K` / `_COST_WEIGHT` / `_SWAP_MARGIN` | `10` / `20` / `0.1` / `0.02` |
 | `PINBALL_OPT_MAX_MOVES` / `_AGENTIC_SHARE_HIGH` / `_AGENTIC_MAX_MOVES` | `2` / `0.5` / `1` |
+| `PINBALL_OPT_CALLER_MIN_SAMPLES` / `_PER_TIER` / `_SHRINK_K` | `30` / `15` / `30` |
+| `PINBALL_OPT_CALLER_MAX_PROFILES` / `_MAX_CHANGES` / `_STALE_DAYS` | `20` / `5` / `14` |
+| `PINBALL_OPT_CALLER_LIGHT_FAIL_GAP` / `_REVERT_MIN_REQUESTS` | `0.15` / `20` |
 | `PINBALL_OPT_REVERT_HOURS` / `_ERROR_MARGIN` / `_ERROR_FLOOR` / `_COST_MARGIN` / `_MIN_REQUESTS` | `6` / `0.5` / `0.01` / `0.25` / `50` |
+| `PINBALL_GITEA_TOKEN` | unset: the pass is skipped (never logged) |
+| `PINBALL_GITEA_URL` / `PINBALL_GITEA_REPO` | `https://gitea.grizzlygeek.net` / `jeefy/carrier` |
+| `PINBALL_OPT_MODELS_URL` | `http://copilot-api.carrier.svc.cluster.local:4141/v1/models` |
+| `PINBALL_OPT_CANDIDATES` | unset: no evaluation |
+| `PINBALL_OPT_CANDIDATE_BUDGET_USD` | `5.0` (separate from the ranking budget) |
+| `PINBALL_OPT_MERGE_WITHOUT_CHECKS` | off: a PR with no status is never merged |
+| `PINBALL_OPT_MAX_PRS` / `_CANDIDATE_NIGHTS` | `3` / `7` |
+| `PINBALL_OPT_DISCOVERY_STRICT` | off: a failed discovery pass never changes the exit code |
 
 CronJob note: build the image with `uv sync --locked --no-dev --extra optimize`
 and use `command: ["pinball-optimize", "run"]` (nightly) plus
 `["pinball-optimize", "--check-revert"]` (a few hours later), sharing the
 overlay volume with pinball.
+
+## New models
+
+The nightly `run` (and `pinball-optimize discover [--dry-run]`) also looks for
+new Copilot models and wires winners into the pool through bot PRs on the
+deployment repo (agentgateway cannot route to a model chosen at runtime, so
+every pool model needs literal gateway config). Two steps, both auto-merged:
+
+1. **Candidate PR** (`pinball-bot/candidate-<id>`): a chat model in
+   `PINBALL_OPT_MODELS_URL` (copilot-api `/v1/models`; embeddings, dated
+   snapshots and legacy GPT-3.5/4/4o ignored) that is not in the pool, the
+   candidate list or its `dropped` list gets ONLY a public `opt-<id>` gateway
+   alias and a `candidates` entry in `k8s/pinball-candidates.yaml`. Nothing
+   live changes.
+2. **Promotion PR** (`pinball-bot/promote-<id>`): on later nights every
+   candidate in the mounted list (`PINBALL_OPT_CANDIDATES`) is replayed on the
+   night's samples of every tier and judged against what the pool served.
+   It wins a tier when it has `PINBALL_OPT_MIN_SAMPLES` non-agentic agreed
+   comparisons and, scored as if appended last, beats the weakest incumbent
+   by the swap margin (largest gap wins). The PR adds it to `models`
+   (`prompt_tokens` = catalogue window capped at 250k, `vision` from the
+   catalogue; missing values default to 100k / false and are flagged in the
+   PR body), at the END of that tier, plus `pinball-<id>`, the `auto` target
+   and placeholder cost rates. The overlay may then move it up.
+   A candidate that won nothing after `PINBALL_OPT_CANDIDATE_NIGHTS` (7) is
+   dropped by a PR (`pinball-bot/drop-<id>`) that removes the alias.
+
+Safety: every edit is a line insertion/rewrite next to an anchor (comments
+untouched); before committing, the edited files must pass
+`optimize/invariants.py`, a copy of the deployment's pool drift test. The bot
+merges only after the PR head has a GREEN commit status (it does not rely on
+Gitea's merge-when-checks-succeed, which merges at once without branch
+protection); failed checks leave the PR open, pending ones are retried the
+next night, and PRs are serial (one unmerged PR blocks further ones). At most
+`PINBALL_OPT_MAX_PRS` (3) new PRs per night; an existing branch or PR for the
+same step is never duplicated. A discovery failure is logged and reported
+but never fails the ranking unless `PINBALL_OPT_DISCOVERY_STRICT=1`.
+
+The variables are in the optimizer table above.
 
 ## Running
 

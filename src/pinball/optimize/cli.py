@@ -1,6 +1,7 @@
 """`pinball-optimize`: nightly re-ranking, dry-run and revert check.
 
   pinball-optimize run [--dry-run] [--seed N] [--per-tier N] [--days N] [--candidates a,b]
+  pinball-optimize discover [--dry-run]      new-model PRs only (README "New models")
   pinball-optimize --check-revert
   python -m pinball.optimize ...
 
@@ -16,7 +17,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
@@ -32,12 +33,32 @@ from pinball.optimize.apply import (
     save_state,
     write_overlay,
 )
+from pinball.optimize.bot import Bot
+from pinball.optimize.caller_settings import caller_settings_from_env
+from pinball.optimize.callers import Policy, draw_caller_samples
+from pinball.optimize.callers_run import (
+    NightInput,
+    learn_night,
+    save_night,
+    with_callers,
+)
 from pinball.optimize.db import TIERS, PostgresDb, ReplayDb
+from pinball.optimize.deps import Deps
+from pinball.optimize.discovery_cli import (
+    DiscoveryEnv,
+    after_ranking,
+    discover,
+    discovery_env,
+    make_bot,
+    night_pass,
+)
 from pinball.optimize.gateway import Budget, Gateway, HttpGateway
 from pinball.optimize.rank import agentic_share, collect, rerank
-from pinball.optimize.replay import make_plan, projected_cost, run_replay
-from pinball.optimize.revert import check
-from pinball.optimize.sample import draw_samples
+from pinball.optimize.replay import make_plan, projected_cost
+from pinball.optimize.report import outcome_counts
+from pinball.optimize.revert_cli import check_revert
+from pinball.optimize.sample import Sample, draw_samples
+from pinball.optimize.schedule import Limits, run_replay
 from pinball.optimize.settings import Settings, settings_from_env
 from pinball.overlay import Overlay, OverlayRejected, merge
 
@@ -50,7 +71,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="pinball-optimize", description="Nightly within-tier re-ranking for pinball."
     )
-    p.add_argument("command", nargs="?", default="run", choices=["run"])
+    p.add_argument("command", nargs="?", default="run", choices=["run", "discover"])
     p.add_argument("--dry-run", action="store_true", help="sample and plan; call no model")
     p.add_argument("--check-revert", action="store_true", help="revert a regressing overlay")
     p.add_argument("--seed", type=int, default=None, help="default: today's date as YYYYMMDD")
@@ -58,14 +79,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--days", type=int, default=1)
     p.add_argument("--candidates", default="", help="comma list; default: every tier model")
     return p.parse_args(argv)
-
-
-@dataclass
-class Deps:
-    db: ReplayDb
-    gateway: Gateway | None  # None: building one is forbidden (dry-run)
-    now: datetime
-    out: TextIO
 
 
 def _base(settings: Settings) -> Config:
@@ -86,10 +99,12 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     live = live_overlay(settings.overlay_path)
     order = _current_order(base, live)
     seed = args.seed if args.seed is not None else int(f"{deps.now:%Y%m%d}")
-    samples = draw_samples(deps.db, args.days, args.per_tier, seed)
+    pool = deps.db.pool(args.days)
+    samples = draw_samples(deps.db, args.days, args.per_tier, seed, pool)
+    extra = draw_caller_samples(deps.db, pool, samples, seed, deps.callers)
     only = frozenset(c for c in args.candidates.split(",") if c) or None
     plan = make_plan(
-        samples, order, settings.judges, seed, only, model_prefix=settings.model_prefix
+        samples + extra, order, settings.judges, seed, only, model_prefix=settings.model_prefix
     )
     budget = Budget(settings.budget_usd, settings.prices)
     projected, fitting = projected_cost(plan, budget)
@@ -97,6 +112,7 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
         "seed": seed,
         "samples": len(samples),
         "per_tier": {t: sum(s.tier == t for s in samples) for t in TIERS},
+        "caller_samples": len(extra),
         "agentic_share": {t: round(agentic_share(samples, t), 4) for t in TIERS},
         "candidate_calls": plan.candidate_calls,
         "judge_calls": plan.judge_calls,
@@ -107,11 +123,15 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     }
     if args.dry_run:
         print(json.dumps({"dry_run": True, **summary}, indent=2), file=deps.out)
-        return EXIT_OK
+        return new_models(settings, deps, (samples, order), seed)
     if deps.gateway is None:
         raise SystemExit("gateway required for a real run")
-    results = run_replay(plan, deps.gateway, budget, settings.workers)
-    evidence = collect(results, samples, settings.prices)
+    limits = Limits(settings.workers, settings.pair_deadline, settings.tier_weights)
+    replay = run_replay(plan, deps.gateway, budget, limits)
+    results = replay.results
+    outcomes = outcome_counts(results)
+    global_ids = frozenset(s.log_id for s in samples)
+    evidence = collect([r for r in results if r.log_id in global_ids], samples, settings.prices)
     tiers = {
         t: rerank(t, order[t], evidence.get(t, {}), agentic_share(samples, t), settings.rank)
         for t in TIERS
@@ -123,23 +143,31 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
         **summary,
         "spent_usd": round(budget.spent, 6),
         "calls": budget.calls,
-        "budget_exhausted": budget.exhausted,
-        "errors": sum(r.error is not None for r in results),
+        # The scheduler refuses pairs before they reach the budget: count both.
+        "budget_exhausted": budget.exhausted or outcomes["budget_refused"] > 0,
+        **outcomes,
+        "tier_budget": replay.shares,
         "previous_version": live.version if live else "",
         "tiers": {t: r.record() for t, r in tiers.items()},
     }
-    changed = any(r.after != r.before for r in tiers.values())
+    night = NightInput(
+        pool, results, samples + extra, global_ids, {t: r.after for t, r in tiers.items()}
+    )
+    policy = Policy(settings.rank, deps.callers, settings.prices)
+    callers = learn_night(live, night, base, (policy, settings.overlay_path, deps.now))
+    entry["callers"] = callers.audit
+    changed = callers.changed or any(r.after != r.before for r in tiers.values())
     code = EXIT_OK
     if not changed:
         entry["result"] = "unchanged"
+        save_night(settings.overlay_path, callers)
     elif settings.overlay_path is None:
         entry["result"] = "no_overlay_path"
     else:
         seq, version = next_version(state, live, deps.now)
         try:
-            overlay = build_overlay(
-                base, live, {t: r.after for t, r in tiers.items()}, version, deps.now
-            )
+            overlay = build_overlay(base, live, night.order, version, deps.now)
+            overlay = with_callers(base, overlay, callers.profiles)
             write_overlay(settings.overlay_path, base, overlay)
         except OverlayRejected as e:
             entry["result"] = f"rejected {e.reason}"
@@ -154,55 +182,26 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
                     changed_at=deps.now.isoformat(),
                 ),
             )
+            save_night(settings.overlay_path, callers)
             entry["result"] = "written"
             entry["version"] = version
     append_audit(settings.audit_file, entry)
     print(json.dumps(entry, indent=2), file=deps.out)
-    return code
+    return new_models(settings, deps, (samples, order), seed) or code
 
 
-def check_revert(settings: Settings, deps: Deps) -> int:
-    state = load_state(settings.state_file)
-    live = live_overlay(settings.overlay_path)
-    entry: dict[str, Any] = {"kind": "check_revert", "at": deps.now.isoformat()}
-    if settings.overlay_path is None or state.current is None or state.changed_at is None:
-        entry["result"] = "nothing_to_check"
-    elif live is None or live.version != state.current.get("version"):
-        # Someone else changed the overlay since we wrote it: not ours to revert.
-        entry["result"] = "foreign_overlay"
-    else:
-        decision = check(
-            deps.db, datetime.fromisoformat(state.changed_at), deps.now, settings.revert
-        )
-        entry.update(decision.record())
-        entry["version"] = live.version
-        if not decision.revert:
-            entry["result"] = "kept"
-        else:
-            base = _base(settings)
-            if state.previous is None:
-                settings.overlay_path.unlink(missing_ok=True)  # base config only
-                restored = ""
-            else:
-                prev = Overlay.model_validate(state.previous)
-                try:
-                    write_overlay(settings.overlay_path, base, prev)
-                except OverlayRejected as e:
-                    entry["result"] = f"previous_rejected {e.reason}"
-                    append_audit(settings.audit_file, entry)
-                    print(json.dumps(entry, indent=2), file=deps.out)
-                    return EXIT_REJECTED
-                restored = prev.version
-            save_state(
-                settings.state_file,
-                State(seq=state.seq, current=state.previous, previous=None, changed_at=None),
-            )
-            entry["result"] = "reverted"
-            entry["restored_version"] = restored
-            log.warning("overlay reverted %s -> %r: %s", live.version, restored, decision.reasons)
-    append_audit(settings.audit_file, entry)
-    print(json.dumps(entry, indent=2), file=deps.out)
-    return EXIT_OK
+def new_models(
+    settings: Settings,
+    deps: Deps,
+    ranked: tuple[list[Sample], dict[str, tuple[str, ...]]],
+    seed: int,
+) -> int:
+    """After ranking; isolated, so it changes the exit code only when configured strict."""
+    if deps.discovery is None:
+        return EXIT_OK
+    night = night_pass(settings, deps.discovery, deps.now, deps.catalog)
+    night = replace(night, seed=seed, samples=ranked[0], order=ranked[1], gateway=deps.gateway)
+    return after_ranking(deps.discovery, night, deps.out, deps.bot_factory)
 
 
 def main(
@@ -212,13 +211,20 @@ def main(
     gateway_factory: Callable[[Settings], Gateway] | None = None,
     now: datetime | None = None,
     out: TextIO | None = None,
+    bot_factory: Callable[[DiscoveryEnv], Bot] = make_bot,
+    catalog: Callable[[], Any] | None = None,
 ) -> int:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     args = parse_args(argv)
-    settings = settings_from_env(os.environ if env is None else env)
+    environ = os.environ if env is None else env
+    settings = settings_from_env(environ)
+    discovery = discovery_env(environ, args.dry_run)
+    if args.command == "discover":
+        night = night_pass(settings, discovery, now or datetime.now(UTC), catalog)
+        return discover(discovery, night, out or sys.stdout, bot_factory)
     if not settings.db_dsn:
         print("PINBALL_OPT_DB_DSN is required", file=sys.stderr)
         return EXIT_CONFIG
@@ -230,7 +236,16 @@ def main(
     gateway = None
     if real_run:
         gateway = (gateway_factory or _http_gateway)(settings)
-    deps = Deps(db, gateway, now or datetime.now(UTC), out or sys.stdout)
+    deps = Deps(
+        db,
+        gateway,
+        now or datetime.now(UTC),
+        out or sys.stdout,
+        caller_settings_from_env(environ),
+        discovery,
+        bot_factory,
+        catalog,
+    )
     if args.check_revert:
         return check_revert(settings, deps)
     return nightly(settings, args, deps)

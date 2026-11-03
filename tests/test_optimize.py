@@ -433,6 +433,8 @@ def test_budget_exhausted_run_records_flag_and_stays_under_cap(tmp_path: Path):
     assert code == 0
     assert entry["budget_exhausted"] is True
     assert entry["spent_usd"] <= 0.05
+    assert entry["budget_refused"] > 0 and entry["errors"] == 0
+    assert entry["gateway_errors"] == {} and "standard" in entry["tier_budget"]
     assert len(gw.calls) < 60
 
 

@@ -1,0 +1,23 @@
+# pinball new-model candidates (pinball README "New models"). Written by the
+# pinball-optimize bot through auto-merged PRs; humans may edit it too.
+#
+# candidates: Copilot chat models under overnight evaluation. Each has a
+#   public opt-<id> alias in k8s/agentgateway.yaml but is NOT in the pinball
+#   pool (no pinball-<id>, no auto target). A winner is moved to the pool by a
+#   second bot PR; a model that wins no tier for 7 nights is dropped.
+# dropped: never proposed again by discovery; delete an entry to re-evaluate.
+#
+# packages/carrier_core/tests/test_pinball_pool.py: opt-* == pool + candidates.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pinball-candidates
+  namespace: carrier
+  labels:
+    app.kubernetes.io/name: carrier
+    app.kubernetes.io/component: pinball-optimizer
+    app.kubernetes.io/part-of: carrier
+data:
+  candidates.yaml: |
+    candidates: []
+    dropped: []
