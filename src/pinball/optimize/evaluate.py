@@ -23,8 +23,9 @@ from typing import Any
 from pinball.optimize.carrier_edit import ModelId
 from pinball.optimize.gateway import Budget, Gateway
 from pinball.optimize.rank import ModelScore, collect, score_tier
-from pinball.optimize.replay import make_plan, run_replay
+from pinball.optimize.replay import make_plan
 from pinball.optimize.sample import Sample
+from pinball.optimize.schedule import Limits, run_replay
 from pinball.optimize.settings import Settings
 
 
@@ -96,7 +97,9 @@ def evaluate(
     gateway, budget = deps
     trial_tiers: dict[str, tuple[str, ...]] = {t: tuple(candidates) for t in order}
     plan = make_plan(samples, trial_tiers, s.judges, seed, model_prefix=s.model_prefix)
-    results = run_replay(plan, gateway, budget, s.workers)
+    # Its own Budget (PINBALL_OPT_CANDIDATE_BUDGET_USD), never the ranking one.
+    limits = Limits(s.workers, s.pair_deadline, s.tier_weights)
+    results = run_replay(plan, gateway, budget, limits).results
     verdicts: list[Verdict] = []
     for c in candidates:
         mine = [r for r in results if r.candidate == c]

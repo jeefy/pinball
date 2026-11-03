@@ -135,6 +135,7 @@ psycopg); the serving image does not include it.
 pinball-optimize run --dry-run              # sample + plan + projected cost, no model calls
 pinball-optimize run --seed 20261103 --per-tier 20 --days 1 [--candidates a,b]
 pinball-optimize --check-revert             # run every few hours after `run`
+pinball-optimize discover [--dry-run]       # new-model PRs only (see "New models")
 ```
 
 Flow of one `run`:
@@ -252,6 +253,14 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_CALLER_MAX_PROFILES` / `_MAX_CHANGES` / `_STALE_DAYS` | `20` / `5` / `14` |
 | `PINBALL_OPT_CALLER_LIGHT_FAIL_GAP` / `_REVERT_MIN_REQUESTS` | `0.15` / `20` |
 | `PINBALL_OPT_REVERT_HOURS` / `_ERROR_MARGIN` / `_ERROR_FLOOR` / `_COST_MARGIN` / `_MIN_REQUESTS` | `6` / `0.5` / `0.01` / `0.25` / `50` |
+| `PINBALL_GITEA_TOKEN` | unset: the pass is skipped (never logged) |
+| `PINBALL_GITEA_URL` / `PINBALL_GITEA_REPO` | `https://gitea.grizzlygeek.net` / `jeefy/carrier` |
+| `PINBALL_OPT_MODELS_URL` | `http://copilot-api.carrier.svc.cluster.local:4141/v1/models` |
+| `PINBALL_OPT_CANDIDATES` | unset: no evaluation |
+| `PINBALL_OPT_CANDIDATE_BUDGET_USD` | `5.0` (separate from the ranking budget) |
+| `PINBALL_OPT_MERGE_WITHOUT_CHECKS` | off: a PR with no status is never merged |
+| `PINBALL_OPT_MAX_PRS` / `_CANDIDATE_NIGHTS` | `3` / `7` |
+| `PINBALL_OPT_DISCOVERY_STRICT` | off: a failed discovery pass never changes the exit code |
 
 CronJob note: build the image with `uv sync --locked --no-dev --extra optimize`
 and use `command: ["pinball-optimize", "run"]` (nightly) plus
@@ -295,14 +304,7 @@ next night, and PRs are serial (one unmerged PR blocks further ones). At most
 same step is never duplicated. A discovery failure is logged and reported
 but never fails the ranking unless `PINBALL_OPT_DISCOVERY_STRICT=1`.
 
-| Variable | Default |
-|---|---|
-| `PINBALL_GITEA_TOKEN` | unset: the pass is skipped (never logged) |
-| `PINBALL_GITEA_URL` / `PINBALL_GITEA_REPO` | `https://gitea.grizzlygeek.net` / `jeefy/carrier` |
-| `PINBALL_OPT_MODELS_URL` | `http://copilot-api.carrier.svc.cluster.local:4141/v1/models` |
-| `PINBALL_OPT_CANDIDATES` | unset: no evaluation |
-| `PINBALL_OPT_CANDIDATE_BUDGET_USD` | `5.0` (separate from the ranking budget) |
-| `PINBALL_OPT_MERGE_WITHOUT_CHECKS` | off: a PR with no status is never merged |
+The variables are in the optimizer table above.
 
 ## Running
 

@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
@@ -34,17 +34,16 @@ from pinball.optimize.apply import (
     write_overlay,
 )
 from pinball.optimize.bot import Bot
-from pinball.optimize.caller_settings import CallerSettings, caller_settings_from_env
+from pinball.optimize.caller_settings import caller_settings_from_env
 from pinball.optimize.callers import Policy, draw_caller_samples
 from pinball.optimize.callers_run import (
     NightInput,
-    RevertCtx,
     learn_night,
-    revert_callers,
     save_night,
     with_callers,
 )
 from pinball.optimize.db import TIERS, PostgresDb, ReplayDb
+from pinball.optimize.deps import Deps
 from pinball.optimize.discovery_cli import (
     DiscoveryEnv,
     after_ranking,
@@ -57,7 +56,7 @@ from pinball.optimize.gateway import Budget, Gateway, HttpGateway
 from pinball.optimize.rank import agentic_share, collect, rerank
 from pinball.optimize.replay import make_plan, projected_cost
 from pinball.optimize.report import outcome_counts
-from pinball.optimize.revert import check
+from pinball.optimize.revert_cli import check_revert
 from pinball.optimize.sample import Sample, draw_samples
 from pinball.optimize.schedule import Limits, run_replay
 from pinball.optimize.settings import Settings, settings_from_env
@@ -80,18 +79,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--days", type=int, default=1)
     p.add_argument("--candidates", default="", help="comma list; default: every tier model")
     return p.parse_args(argv)
-
-
-@dataclass
-class Deps:
-    db: ReplayDb
-    gateway: Gateway | None  # None: building one is forbidden (dry-run)
-    now: datetime
-    out: TextIO
-    callers: CallerSettings = field(default_factory=CallerSettings)
-    discovery: DiscoveryEnv | None = None
-    bot_factory: Callable[[DiscoveryEnv], Bot] = make_bot
-    catalog: Callable[[], Any] | None = None
 
 
 def _base(settings: Settings) -> Config:
@@ -215,61 +202,6 @@ def new_models(
     night = night_pass(settings, deps.discovery, deps.now, deps.catalog)
     night = replace(night, seed=seed, samples=ranked[0], order=ranked[1], gateway=deps.gateway)
     return after_ranking(deps.discovery, night, deps.out, deps.bot_factory)
-
-
-def check_revert(settings: Settings, deps: Deps) -> int:
-    state = load_state(settings.state_file)
-    live = live_overlay(settings.overlay_path)
-    entry: dict[str, Any] = {"kind": "check_revert", "at": deps.now.isoformat()}
-    if settings.overlay_path is None or state.current is None or state.changed_at is None:
-        entry["result"] = "nothing_to_check"
-    elif live is None or live.version != state.current.get("version"):
-        # Someone else changed the overlay since we wrote it: not ours to revert.
-        entry["result"] = "foreign_overlay"
-    else:
-        decision = check(
-            deps.db, datetime.fromisoformat(state.changed_at), deps.now, settings.revert
-        )
-        entry.update(decision.record())
-        entry["version"] = live.version
-        if not decision.revert:
-            ctx = RevertCtx(
-                _base(settings),
-                settings.overlay_path,
-                settings.state_file,
-                (settings.revert, deps.callers),
-            )
-            try:
-                entry.update(revert_callers(deps.db, live, state, deps.now, ctx))
-            except OverlayRejected as e:
-                entry["result"] = f"callers_rejected {e.reason}"
-            else:
-                entry["result"] = "callers_reverted" if entry["callers_reverted"] else "kept"
-        else:
-            base = _base(settings)
-            if state.previous is None:
-                settings.overlay_path.unlink(missing_ok=True)  # base config only
-                restored = ""
-            else:
-                prev = Overlay.model_validate(state.previous)
-                try:
-                    write_overlay(settings.overlay_path, base, prev)
-                except OverlayRejected as e:
-                    entry["result"] = f"previous_rejected {e.reason}"
-                    append_audit(settings.audit_file, entry)
-                    print(json.dumps(entry, indent=2), file=deps.out)
-                    return EXIT_REJECTED
-                restored = prev.version
-            save_state(
-                settings.state_file,
-                State(seq=state.seq, current=state.previous, previous=None, changed_at=None),
-            )
-            entry["result"] = "reverted"
-            entry["restored_version"] = restored
-            log.warning("overlay reverted %s -> %r: %s", live.version, restored, decision.reasons)
-    append_audit(settings.audit_file, entry)
-    print(json.dumps(entry, indent=2), file=deps.out)
-    return EXIT_OK
 
 
 def main(
