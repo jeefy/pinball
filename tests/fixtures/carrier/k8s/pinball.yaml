@@ -1,0 +1,117 @@
+# pinball (https://github.com/jeefy/pinball): HTTP ext_authz service behind
+# the `auto` virtual model in k8s/agentgateway.yaml. Reads each `model: auto`
+# request body and answers {"model", "tier", "reason", ...}; the gateway routes
+# to the matching pinball-* internal model, or to the fallback target when
+# pinball is down or slow (failureMode: allow). Always answers 200, never
+# modifies a request. See k8s/README.md "pinball (auto model)".
+#
+# The pool below overrides the image's packaged pinball.yaml. Every model in
+# `models` needs a pinball-<id> model and an `auto` target in
+# k8s/agentgateway.yaml (packages/carrier_core/tests/test_pinball_pool.py).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pinball-config
+  namespace: carrier
+  labels:
+    app.kubernetes.io/name: carrier
+    app.kubernetes.io/component: pinball
+    app.kubernetes.io/part-of: carrier
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  pinball.yaml: |
+    # prompt_tokens is a COST CAP, not the model's window (2026-11-03).
+    # Copilot's catalogue says 200k for Claude/Gemini but does not enforce
+    # it: opus/fable served ~800k prompts, both Geminis 260k. Past the cap
+    # a prompt fit-falls to kimi-k3. 250k x headroom 0.9 = 225k, just above
+    # OpenCode's 220k compaction point (limit.input), so an OpenCode session
+    # compacts before it would switch models mid-session. Do not raise to
+    # real windows without a cost decision.
+    models:
+      claude-haiku-5.5:  {prompt_tokens: 100000, vision: true}
+      claude-haiku-4.5:  {prompt_tokens: 136000, vision: true}
+      claude-sonnet-5.5: {prompt_tokens: 250000, vision: true}
+      claude-sonnet-5:   {prompt_tokens: 250000, vision: true}
+      gemini-3.8-flash:  {prompt_tokens: 250000, vision: true}
+      claude-opus-5.5:   {prompt_tokens: 250000, vision: true}
+      claude-opus-5:     {prompt_tokens: 250000, vision: true}
+      claude-opus-4.8:   {prompt_tokens: 250000, vision: true}
+      claude-fable-5.1:  {prompt_tokens: 250000, vision: true}
+      claude-fable-5:    {prompt_tokens: 250000, vision: true}
+      gemini-4-argon:    {prompt_tokens: 250000, vision: true}
+      kimi-k3:           {prompt_tokens: 917504, vision: true}
+    tiers:
+      # claude-haiku-4.5 left light 2026-11-03 (still in the pool, unused):
+      # in hermes-automation eval_research live mode it searched 11-19 times
+      # without opening a page in 2 of 3 runs (support 0.29 vs haiku-5.5 0.77).
+      # Prompts past haiku-5.5's window now fit-fall to standard.
+      light: [claude-haiku-5.5]
+      standard: [claude-sonnet-5.5, claude-sonnet-5, gemini-3.8-flash]
+      heavy: [claude-opus-5.5, claude-fable-5.1, claude-opus-5, gemini-4-argon, kimi-k3]
+    thresholds:
+      standard: 1
+      heavy: 4
+    # Points per signal and size cutoffs (pinball >= 0.2.0; values = defaults).
+    # Explicit so the routing optimizer has one place to tune.
+    scoring:
+      code: 1
+      heavy_keyword: 1
+      max_heavy_keywords: 2
+      light_keyword: -1
+      long_chars: 4000
+      long: 1
+      very_long_chars: 12000
+      very_long: 2
+      short_chars: 160
+      short: -1
+      tools: 1
+      effort_high: 2
+      effort_low: -1
+      small_output_tokens: 512
+      small_output: -1
+      structured: -1
+    # 2026-11-03 (pinball >= 0.3.0): Hermes pastes the whole skill file into a
+    # user message; scored as user text it pinned 48 overnight skill-session
+    # turns to opus. Score only the user's instruction inside it (or nothing).
+    wrapped_user_messages:
+      - prefix: "[IMPORTANT: The user has invoked the "
+        instruction_markers:
+          - "The user has provided the following instruction alongside the skill invocation: "
+          - "\nUser instruction: "
+        instruction_end: "\n\n[Runtime note:"
+    headroom: 0.9
+    heavy_keywords:
+      - architecture
+      - architect
+      - refactor
+      - debug
+      - root cause
+      - race condition
+      - deadlock
+      - concurrency
+      - prove
+      - proof
+      - security
+      - vulnerability
+      - migrate
+      - migration
+      - optimize
+      - performance
+      - algorithm
+      - trade-off
+      - tradeoff
+      - distributed
+      - invariant
+      - investigate
+    light_keywords:
+      - title
+      - summarize
+      - summary
+      - translate
+      - classify
+      - extract
+      - rephrase
+      - one word
+      - yes or no
+      - tl;dr
