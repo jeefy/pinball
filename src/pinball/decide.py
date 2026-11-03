@@ -14,14 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Final, assert_never
 
-from pinball.config import TIER_ORDER, Config, Tier, keyword_pattern
+from pinball.config import TIER_ORDER, Config, Scoring, Tier, keyword_pattern
 from pinball.features import Effort, Features
-
-LONG_MESSAGE_CHARS: Final = 4000
-VERY_LONG_MESSAGE_CHARS: Final = 12000
-SHORT_MESSAGE_CHARS: Final = 160
-MAX_KEYWORD_POINTS: Final = 2
-SMALL_OUTPUT_TOKENS: Final = 512
 
 _CODE: Final = re.compile(
     r"```|Traceback \(most recent call last\)|\bpanic: |^\s+at [\w.$<>]+\(",
@@ -61,7 +55,7 @@ class Decider:
             key=lambda m: m.score,
             default=_MessageScore(0, ()),
         )
-        request_score, request_signals = _score_request(features)
+        request_score, request_signals = _score_request(features, self._config.scoring)
         score = message.score + request_score
         signals = [*message.signals, *request_signals]
 
@@ -97,59 +91,64 @@ class Decider:
         return self._largest, f"fit:{self._largest}"
 
     def _score_message(self, text: str) -> _MessageScore:
+        s = self._config.scoring
         score = 0
         signals: list[str] = []
         code = _CODE.search(text) is not None
         if code:
-            score += 1
+            score += s.code
             signals.append("code")
 
         heavy = sorted(
             {m.group(0).lower() for m in self._heavy.finditer(text)} if self._heavy else ()
         )
         if heavy:
-            score += min(len(heavy), MAX_KEYWORD_POINTS)
-            signals.extend(f"kw:{w}" for w in heavy[:MAX_KEYWORD_POINTS])
+            counted = heavy[: s.max_heavy_keywords]
+            score += s.heavy_keyword * len(counted)
+            signals.extend(f"kw:{w}" for w in counted)
 
         n = len(text)
-        if n >= VERY_LONG_MESSAGE_CHARS:
-            score += 2
+        if n >= s.very_long_chars:
+            score += s.very_long
             signals.append("very_long")
-        elif n >= LONG_MESSAGE_CHARS:
-            score += 1
+        elif n >= s.long_chars:
+            score += s.long
             signals.append("long")
 
         light = self._light.search(text) if self._light else None
         if light:
-            score -= 1
+            score += s.light_keyword
             signals.append(f"light:{light.group(0).lower()}")
-        if n < SHORT_MESSAGE_CHARS and not code and not heavy:
-            score -= 1
+        if n < s.short_chars and not code and not heavy:
+            score += s.short
             signals.append("short")
         return _MessageScore(score, tuple(signals))
 
 
-def _score_request(features: Features) -> tuple[int, list[str]]:
+def _score_request(features: Features, s: Scoring) -> tuple[int, list[str]]:
     score = 0
     signals: list[str] = []
     if features.tools:
-        score += 1
+        score += s.tools
         signals.append("tools")
     match features.effort:
         case Effort.HIGH:
-            score += 2
+            score += s.effort_high
             signals.append("effort:high")
         case Effort.LOW:
-            score -= 1
+            score += s.effort_low
             signals.append("effort:low")
         case Effort.MEDIUM | None:
             pass
         case unreachable:
             assert_never(unreachable)
-    if features.max_output_tokens is not None and features.max_output_tokens <= SMALL_OUTPUT_TOKENS:
-        score -= 1
+    if (
+        features.max_output_tokens is not None
+        and features.max_output_tokens <= s.small_output_tokens
+    ):
+        score += s.small_output
         signals.append("small_output")
     if features.structured:
-        score -= 1
+        score += s.structured
         signals.append("structured")
     return score, signals

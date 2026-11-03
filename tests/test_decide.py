@@ -156,3 +156,19 @@ def test_shipped_config_routes_title_to_haiku_and_debugging_to_opus():
     )
     assert light.model == "claude-haiku-5.5"
     assert heavy.model == "claude-opus-5.5"
+
+
+def test_scoring_block_changes_weights_and_cutoffs():
+    tuned = CONFIG.model_copy(
+        update={"scoring": CONFIG.scoring.model_copy(update={"heavy_keyword": 3, "short_chars": 0})}
+    )
+    d = Decider(tuned).decide(parse(chat("fix the security bug")))
+    assert (d.tier, d.score, d.signals) == (Tier.HEAVY, 3, ("kw:security",))
+
+
+def test_max_heavy_keywords_caps_signals_and_points():
+    tuned = CONFIG.model_copy(
+        update={"scoring": CONFIG.scoring.model_copy(update={"max_heavy_keywords": 1})}
+    )
+    d = Decider(tuned).decide(parse(chat("refactor for security and find the root cause")))
+    assert d.score == 1 and [s for s in d.signals if s.startswith("kw:")] == ["kw:refactor"]

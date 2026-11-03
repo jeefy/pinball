@@ -48,3 +48,21 @@ def test_keyword_pattern_matches_whole_words_only():
     assert pat.search("ROOT CAUSE please")
     assert not pat.search("airplane")
     assert keyword_pattern(()) is None
+
+
+def test_scoring_defaults_apply_when_the_block_is_absent():
+    s = Config.model_validate(BASE).scoring
+    assert (s.code, s.very_long, s.long_chars, s.short_chars, s.max_heavy_keywords) == (
+        1,
+        2,
+        4000,
+        160,
+        2,
+    )
+
+
+def test_scoring_rejects_unknown_keys_and_inverted_cutoffs():
+    with pytest.raises(ValidationError, match="extra"):
+        Config.model_validate({**BASE, "scoring": {"cod": 1}})
+    with pytest.raises(ValidationError, match="very_long_chars"):
+        Config.model_validate({**BASE, "scoring": {"long_chars": 5000, "very_long_chars": 5000}})

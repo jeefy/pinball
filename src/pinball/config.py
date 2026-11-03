@@ -40,12 +40,42 @@ class Thresholds(BaseModel):
         return self
 
 
+class Scoring(BaseModel):
+    """Points per signal and the size cutoffs; every key is optional."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    code: int = 1
+    heavy_keyword: int = 1
+    max_heavy_keywords: int = Field(default=2, ge=0)
+    light_keyword: int = -1
+    long_chars: int = Field(default=4000, gt=0)
+    long: int = 1
+    very_long_chars: int = Field(default=12000, gt=0)
+    very_long: int = 2
+    short_chars: int = Field(default=160, ge=0)
+    short: int = -1
+    tools: int = 1
+    effort_high: int = 2
+    effort_low: int = -1
+    small_output_tokens: int = Field(default=512, ge=0)
+    small_output: int = -1
+    structured: int = -1
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.very_long_chars <= self.long_chars:
+            raise ValueError("scoring.very_long_chars must be greater than scoring.long_chars")
+        return self
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     models: dict[str, ModelSpec] = Field(min_length=1)
     tiers: dict[Tier, tuple[str, ...]]
     thresholds: Thresholds
+    scoring: Scoring = Scoring()
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()

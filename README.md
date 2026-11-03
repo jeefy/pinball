@@ -43,18 +43,18 @@ conversation plus request-level signals. Tool output, tool arguments,
 assistant turns and system prompts count toward prompt size but are never
 scored.
 
-| Signal | Points |
-| --- | --- |
-| code fence, traceback, Go panic or stack frame | +1 |
-| heavy keyword (`refactor`, `root cause`, `deadlock`, …), each distinct | +1 (max +2) |
-| message ≥ 4,000 chars / ≥ 12,000 chars | +1 / +2 |
-| light keyword (`title`, `summarize`, `translate`, …) | −1 |
-| message < 160 chars with no code or heavy keyword | −1 |
-| `tools` present | +1 |
-| reasoning effort high/xhigh/max, or thinking budget ≥ 16k | +2 |
-| reasoning effort none/minimal/low | −1 |
-| max output tokens ≤ 512 | −1 |
-| JSON response format | −1 |
+| Signal | Default points | `scoring` keys |
+| --- | --- | --- |
+| code fence, traceback, Go panic or stack frame | +1 | `code` |
+| heavy keyword (`refactor`, `root cause`, `deadlock`, …), each distinct | +1 (max 2 counted) | `heavy_keyword`, `max_heavy_keywords` |
+| message ≥ 4,000 chars / ≥ 12,000 chars | +1 / +2 | `long_chars`, `long`, `very_long_chars`, `very_long` |
+| light keyword (`title`, `summarize`, `translate`, …) | −1 | `light_keyword` |
+| message < 160 chars with no code or heavy keyword | −1 | `short_chars`, `short` |
+| `tools` present | +1 | `tools` |
+| reasoning effort high/xhigh/max, or thinking budget ≥ 16k | +2 | `effort_high` |
+| reasoning effort none/minimal/low | −1 | `effort_low` |
+| max output tokens ≤ 512 | −1 | `small_output_tokens`, `small_output` |
+| JSON response format | −1 | `structured` |
 
 `score < thresholds.standard` is light and `score >= thresholds.heavy` is
 heavy. Everything in between is standard.
@@ -71,8 +71,8 @@ window. The `x-pinball-tier: light|standard|heavy` request header, when the
 gateway forwards it, overrides the score.
 
 All of this lives in [`pinball.yaml`](pinball.yaml): the model pool with
-prompt windows, per-tier preference order, thresholds, headroom and keyword
-lists. Mount your own copy and point `PINBALL_CONFIG` at it.
+prompt windows, per-tier preference order, thresholds, signal points and
+cutoffs (`scoring`, every key optional), headroom and keyword lists. Mount your own copy and point `PINBALL_CONFIG` at it.
 
 ## Running
 

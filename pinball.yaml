@@ -33,13 +33,33 @@ thresholds:
   standard: 1
   heavy: 3
 
+# Points per signal and the size cutoffs (chars of one user message; output
+# tokens for small_output). Every key is optional; these are the defaults.
+# heavy_keyword is per distinct keyword, at most max_heavy_keywords counted.
+scoring:
+  code: 1
+  heavy_keyword: 1
+  max_heavy_keywords: 2
+  light_keyword: -1
+  long_chars: 4000
+  long: 1
+  very_long_chars: 12000
+  very_long: 2
+  short_chars: 160
+  short: -1
+  tools: 1
+  effort_high: 2
+  effort_low: -1
+  small_output_tokens: 512
+  small_output: -1
+  structured: -1
+
 # Use at most this share of a model's prompt window (token counts are a
 # chars/3.5 estimate).
 headroom: 0.9
 
 # Matched case-insensitively on word boundaries in user-authored text only
-# (never tool output or system prompts). Each distinct heavy keyword is +1 (at
-# most +2 per message); any light keyword is -1.
+# (never tool output or system prompts); points are in `scoring`.
 heavy_keywords:
   - architecture
   - architect
