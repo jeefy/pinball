@@ -196,6 +196,7 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_PRICES` | built-in estimates |
 | `PINBALL_OPT_JUDGES` | `judge-opus,judge-argon` |
 | `PINBALL_OPT_WORKERS` | `4` |
+| `PINBALL_OPT_MODEL_PREFIX` | empty (candidates are sent as `<prefix><pool-id>`, e.g. `opt-`; judges, reports, overlay and prices keep bare ids) |
 | `PINBALL_OVERLAY_PATH` | unset (nothing written) |
 | `PINBALL_CONFIG` | packaged `pinball.yaml` |
 | `PINBALL_OPT_AUDIT_PATH` | `optimize-audit.jsonl` next to the overlay |

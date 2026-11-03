@@ -109,12 +109,14 @@ def metered(
     *,
     max_tokens: int,
     caller: str,
+    wire_model: str | None = None,
 ) -> Completion:
+    """Price on `model`; send `wire_model` (a gateway alias) when given."""
     held = budget.reserve(model, messages, max_tokens)
     if held is None:
         raise BudgetExhausted(model)
     try:
-        done = gateway.chat(model, messages, max_tokens=max_tokens, caller=caller)
+        done = gateway.chat(wire_model or model, messages, max_tokens=max_tokens, caller=caller)
     except BaseException:
         budget.release(held)
         raise

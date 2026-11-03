@@ -88,7 +88,9 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     seed = args.seed if args.seed is not None else int(f"{deps.now:%Y%m%d}")
     samples = draw_samples(deps.db, args.days, args.per_tier, seed)
     only = frozenset(c for c in args.candidates.split(",") if c) or None
-    plan = make_plan(samples, order, settings.judges, seed, only)
+    plan = make_plan(
+        samples, order, settings.judges, seed, only, model_prefix=settings.model_prefix
+    )
     budget = Budget(settings.budget_usd, settings.prices)
     projected, fitting = projected_cost(plan, budget)
     summary = {

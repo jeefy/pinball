@@ -106,6 +106,7 @@ class Settings(BaseModel):
     audit_path: Path | None = None
     state_path: Path | None = None
     judges: tuple[str, ...] = DEFAULT_JUDGES
+    model_prefix: str = ""  # candidates reach the gateway as <prefix><pool-id>
     workers: int = Field(default=4, ge=1)
     prices: PriceTable = PriceTable()
     rank: RankSettings = RankSettings()
@@ -150,6 +151,7 @@ _TOP_ENV: Final = {
     "PINBALL_OPT_AUDIT_PATH": "audit_path",
     "PINBALL_OPT_STATE_PATH": "state_path",
     "PINBALL_OPT_WORKERS": "workers",
+    "PINBALL_OPT_MODEL_PREFIX": "model_prefix",
 }
 
 

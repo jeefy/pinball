@@ -524,3 +524,46 @@ def test_pair_result_record_is_content_free():
     rec = r.record()
     assert rec["agreed"] is None and rec["independent"] is None
     assert set(rec) >= {"log_id", "candidate", "verdicts", "agreed"}
+
+
+# --- gateway model prefix ---------------------------------------------------------------
+
+
+def test_metered_sends_wire_alias_but_prices_bare_id():
+    prices = PriceTable(
+        models={"m": Price(input=0.0, output=0.0)}, default=Price(input=1e6, output=1e6)
+    )
+    budget = Budget(1.0, prices)
+    gw = FakeGateway(usage=(10, 10))
+    metered(
+        gw, budget, "m", [{"content": "x"}], max_tokens=5, caller="eval-replay", wire_model="opt-m"
+    )
+    assert gw.calls == [("opt-m", "eval-replay")]
+    assert budget.spent == 0.0 and not budget.exhausted  # alias would cost $20 at default
+
+
+def test_model_prefix_applies_to_candidate_wire_names_only(tmp_path: Path):
+    gw = FakeGateway(better={"opt-s2"})  # the fake sees wire names
+    env = {"PINBALL_OPT_MODEL_PREFIX": "opt-"}
+    code, _ = run(tmp_path, ["run", "--per-tier", "10", "--seed", "1"], traffic(), gw, **env)
+    assert code == 0
+    candidates = {m for m, c in gw.calls if c == "eval-replay"}
+    judges = {m for m, c in gw.calls if c == "eval-replay-judge"}
+    assert candidates and all(m.startswith("opt-") for m in candidates)
+    assert judges == {"judge-opus", "judge-argon"}
+    overlay = load_overlay(tmp_path / "overlay.yaml")
+    assert overlay.tier_order[Tier.STANDARD] == ("s2", "s1", "s3")
+    audit = (tmp_path / "optimize-audit.jsonl").read_text()
+    assert "opt-s" not in audit
+    entry = json.loads(audit.splitlines()[-1])
+    assert entry["tiers"]["standard"]["moves"][0]["model"] == "s2"
+
+
+def test_empty_model_prefix_is_a_no_op(tmp_path: Path):
+    from pinball.optimize.settings import settings_from_env
+
+    assert settings_from_env({}).model_prefix == ""
+    gw = FakeGateway(better={"s2"})
+    run(tmp_path, ["run", "--per-tier", "10", "--seed", "1"], traffic(), gw)
+    candidates = {m for m, c in gw.calls if c == "eval-replay"}
+    assert candidates and candidates <= {"l1", "l2", "s1", "s2", "s3", "h1"}

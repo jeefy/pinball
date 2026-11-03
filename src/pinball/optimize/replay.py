@@ -96,6 +96,7 @@ class Plan:
     pairs: tuple[tuple[Sample, str], ...]
     judges: tuple[str, ...]
     seed: int
+    model_prefix: str = ""  # gateway alias prefix for candidates only, never judges
 
     @property
     def candidate_calls(self) -> int:
@@ -112,6 +113,8 @@ def make_plan(
     judges: tuple[str, ...],
     seed: int,
     only: frozenset[str] | None = None,
+    *,
+    model_prefix: str = "",
 ) -> Plan:
     """Each sample against every other model of its tier (optionally restricted to `only`)."""
     pairs: list[tuple[Sample, str]] = []
@@ -120,7 +123,7 @@ def make_plan(
             if model == s.served_model or (only is not None and model not in only):
                 continue
             pairs.append((s, model))
-    return Plan(tuple(pairs), judges, seed)
+    return Plan(tuple(pairs), judges, seed, model_prefix)
 
 
 def projected_cost(plan: Plan, budget: Budget) -> tuple[float, int]:
@@ -165,6 +168,7 @@ def replay_pair(
             [dict(m) for m in sample.messages],
             max_tokens=CANDIDATE_MAX_TOKENS,
             caller=CALLER,
+            wire_model=plan.model_prefix + model,
         )
     except BudgetExhausted:
         result.error = "budget"
