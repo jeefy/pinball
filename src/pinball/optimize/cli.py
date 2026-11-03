@@ -35,9 +35,11 @@ from pinball.optimize.apply import (
 from pinball.optimize.db import TIERS, PostgresDb, ReplayDb
 from pinball.optimize.gateway import Budget, Gateway, HttpGateway
 from pinball.optimize.rank import agentic_share, collect, rerank
-from pinball.optimize.replay import make_plan, projected_cost, run_replay
+from pinball.optimize.replay import make_plan, projected_cost
+from pinball.optimize.report import outcome_counts
 from pinball.optimize.revert import check
 from pinball.optimize.sample import draw_samples
+from pinball.optimize.schedule import Limits, run_replay
 from pinball.optimize.settings import Settings, settings_from_env
 from pinball.overlay import Overlay, OverlayRejected, merge
 
@@ -110,7 +112,10 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
         return EXIT_OK
     if deps.gateway is None:
         raise SystemExit("gateway required for a real run")
-    results = run_replay(plan, deps.gateway, budget, settings.workers)
+    limits = Limits(settings.workers, settings.pair_deadline, settings.tier_weights)
+    replay = run_replay(plan, deps.gateway, budget, limits)
+    results = replay.results
+    outcomes = outcome_counts(results)
     evidence = collect(results, samples, settings.prices)
     tiers = {
         t: rerank(t, order[t], evidence.get(t, {}), agentic_share(samples, t), settings.rank)
@@ -123,8 +128,10 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
         **summary,
         "spent_usd": round(budget.spent, 6),
         "calls": budget.calls,
-        "budget_exhausted": budget.exhausted,
-        "errors": sum(r.error is not None for r in results),
+        # The scheduler refuses pairs before they reach the budget: count both.
+        "budget_exhausted": budget.exhausted or outcomes["budget_refused"] > 0,
+        **outcomes,
+        "tier_budget": replay.shares,
         "previous_version": live.version if live else "",
         "tiers": {t: r.record() for t, r in tiers.items()},
     }

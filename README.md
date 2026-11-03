@@ -160,13 +160,24 @@ Flow of one `run`:
    kept in the state file for revert.
 5. **Audit**: one JSON line per run/check (`PINBALL_OPT_AUDIT_PATH`): sample
    counts, agentic share, per-model n/quality/score/cost, moves and why,
-   spend, `budget_exhausted`, previous version. No prompt or response text is
-   ever persisted; judge reasons stay in memory.
+   spend, `budget_exhausted`, previous version, and outcome counts:
+   `budget_refused` (pairs never sent for lack of budget; not an error),
+   `errors` (real failures only), `gateway_errors` (candidate model → label:
+   `HTTP <status>`, `transport <type>`, `timeout`), `judge_unparseable` and
+   `judge_failed` per judge, and `tier_budget` (share and spend per tier).
+   No prompt, response or error-body text is ever persisted; judge reasons
+   stay in memory.
 
 **Spend cap.** Every gateway call first reserves its worst case (input
 tokens bounded at chars/2, output at `max_tokens`) at the model's price; a
-call that does not fit under `PINBALL_OPT_BUDGET_USD` (default $10) is never
-issued. After the call the reserve is replaced by the reported usage. The run
+call that does not fit under `PINBALL_OPT_BUDGET_USD` (default $20) is never
+issued. The cap is stratified: pairs go out round-robin over (tier, candidate),
+so every candidate gets a pair before any gets a second, and each tier with
+pairs gets a share of the cap by `PINBALL_OPT_TIER_WEIGHTS` (default equal). A
+tier cannot spend past its share while another tier has pairs left; a
+finished tier's leftover rolls over. A pair running longer than
+`PINBALL_OPT_PAIR_DEADLINE` is recorded as gateway error `timeout` and its
+worker slot is freed. After the call the reserve is replaced by the reported usage. The run
 finishes with whatever was judged and records `budget_exhausted: true`. The
 default price table (`settings.py`) holds **estimates**, not invoices; override
 it with `PINBALL_OPT_PRICES` (YAML `{models: {name: {input, output}}, default: {...}}`,
@@ -192,7 +203,9 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_DB_DSN` | required (read-only role recommended) |
 | `PINBALL_OPT_GATEWAY_URL` | required for `run` (not for dry-run/check) |
 | `PINBALL_OPT_GATEWAY_TIMEOUT` | `300` s |
-| `PINBALL_OPT_BUDGET_USD` | `10.0` |
+| `PINBALL_OPT_BUDGET_USD` | `20.0` |
+| `PINBALL_OPT_TIER_WEIGHTS` | equal (e.g. `light=1,standard=1,heavy=2`) |
+| `PINBALL_OPT_PAIR_DEADLINE` | `180` s per (sample, candidate) |
 | `PINBALL_OPT_PRICES` | built-in estimates |
 | `PINBALL_OPT_JUDGES` | `judge-opus,judge-argon` |
 | `PINBALL_OPT_WORKERS` | `4` |
