@@ -54,6 +54,20 @@ scoring:
   small_output: -1
   structured: -1
 
+# User-role messages that are mostly client scaffolding, e.g. an agent that
+# pastes a whole skill file into a user message. A message starting with
+# `prefix` still counts toward prompt size, but only the text after the last
+# instruction marker (cut at instruction_end) is scored; with no marker, none
+# of it is. Example for Hermes Agent skill invocations:
+#
+#   wrapped_user_messages:
+#     - prefix: "[IMPORTANT: The user has invoked the "
+#       instruction_markers:
+#         - "The user has provided the following instruction alongside the skill invocation: "
+#         - "\nUser instruction: "   # skill bundles
+#       instruction_end: "\n\n[Runtime note:"
+wrapped_user_messages: []
+
 # Use at most this share of a model's prompt window (token counts are a
 # chars/3.5 estimate).
 headroom: 0.9

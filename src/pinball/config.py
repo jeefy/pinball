@@ -69,6 +69,21 @@ class Scoring(BaseModel):
         return self
 
 
+class WrappedUserMessage(BaseModel):
+    """A user-role message that is mostly client scaffolding (e.g. an injected skill file).
+
+    Only the text after the last `instruction_markers` hit (first marker that
+    matches wins), cut at `instruction_end`, is scored; with no marker the
+    message is not scored at all. It still counts toward prompt size.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    prefix: str = Field(min_length=1)
+    instruction_markers: tuple[str, ...] = ()
+    instruction_end: str = ""
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -76,6 +91,7 @@ class Config(BaseModel):
     tiers: dict[Tier, tuple[str, ...]]
     thresholds: Thresholds
     scoring: Scoring = Scoring()
+    wrapped_user_messages: tuple[WrappedUserMessage, ...] = ()
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()

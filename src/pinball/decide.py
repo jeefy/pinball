@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Final, assert_never
 
-from pinball.config import TIER_ORDER, Config, Scoring, Tier, keyword_pattern
+from pinball.config import TIER_ORDER, Config, Scoring, Tier, WrappedUserMessage, keyword_pattern
 from pinball.features import Effort, Features
 
 _CODE: Final = re.compile(
@@ -50,14 +50,17 @@ class Decider:
         self._largest = max(config.models, key=lambda n: config.models[n].prompt_tokens)
 
     def decide(self, features: Features, hint: Tier | None = None) -> Decision:
+        texts = [_unwrap(t, self._config.wrapped_user_messages) for t in features.user_texts]
         message = max(
-            (self._score_message(t) for t in features.user_texts),
+            (self._score_message(t) for t in texts if t is not None),
             key=lambda m: m.score,
             default=_MessageScore(0, ()),
         )
         request_score, request_signals = _score_request(features, self._config.scoring)
         score = message.score + request_score
         signals = [*message.signals, *request_signals]
+        if any(t != u for t, u in zip(texts, features.user_texts, strict=True)):
+            signals.append("wrapped")
 
         if hint is None:
             tier = self._tier_for(score)
@@ -123,6 +126,23 @@ class Decider:
             score += s.short
             signals.append("short")
         return _MessageScore(score, tuple(signals))
+
+
+def _unwrap(text: str, wrappers: tuple[WrappedUserMessage, ...]) -> str | None:
+    """The part of a user message to score: all of it, the instruction inside
+    client scaffolding, or None when the scaffolding carries no instruction."""
+    for w in wrappers:
+        if not text.startswith(w.prefix):
+            continue
+        for marker in w.instruction_markers:
+            i = text.rfind(marker)
+            if i >= 0:
+                rest = text[i + len(marker) :]
+                if w.instruction_end:
+                    rest = rest.split(w.instruction_end, 1)[0]
+                return rest.strip() or None
+        return None
+    return text
 
 
 def _score_request(features: Features, s: Scoring) -> tuple[int, list[str]]:

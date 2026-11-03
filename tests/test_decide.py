@@ -3,7 +3,7 @@ from __future__ import annotations
 import orjson
 import pytest
 
-from pinball.config import Config, Tier, load_config
+from pinball.config import Config, Tier, WrappedUserMessage, load_config
 from pinball.decide import Decider
 from pinball.features import parse
 
@@ -172,3 +172,51 @@ def test_max_heavy_keywords_caps_signals_and_points():
     )
     d = Decider(tuned).decide(parse(chat("refactor for security and find the root cause")))
     assert d.score == 1 and [s for s in d.signals if s.startswith("kw:")] == ["kw:refactor"]
+
+
+SKILL = (
+    '[IMPORTANT: The user has invoked the "ops" skill, indicating they want you to follow '
+    "its instructions. The full skill content is loaded below.]"
+)
+INSTR = "The user has provided the following instruction alongside the skill invocation: "
+WRAPPED = CONFIG.model_copy(
+    update={
+        "wrapped_user_messages": (
+            WrappedUserMessage(
+                prefix="[IMPORTANT: The user has invoked the ",
+                instruction_markers=(INSTR,),
+                instruction_end="\n\n[Runtime note:",
+            ),
+        )
+    }
+)
+
+
+def _scored(d) -> tuple[str, ...]:
+    return tuple(s for s in d.signals if not s.startswith("fit:"))
+
+
+SKILL_BODY = "Debug the deadlock and refactor for security.\n```sh\nkubectl get pods\n```\n" * 300
+
+
+def test_wrapped_skill_body_is_not_scored_but_its_instruction_is():
+    bare = Decider(CONFIG).decide(parse(chat(f"{SKILL}\n\n{SKILL_BODY}\n\n{INSTR}what time is it")))
+    assert bare.tier is Tier.HEAVY
+    d = Decider(WRAPPED).decide(parse(chat(f"{SKILL}\n\n{SKILL_BODY}\n\n{INSTR}what time is it")))
+    assert d.tier is Tier.LIGHT
+    assert _scored(d) == ("short", "wrapped")
+    assert d.est_tokens == bare.est_tokens
+
+
+def test_wrapped_instruction_keeps_its_own_signals_and_stops_at_the_end_marker():
+    text = (
+        f"{SKILL}\n\n{SKILL_BODY}\n\n{INSTR}find the root cause"
+        "\n\n[Runtime note: deadlock refactor]"
+    )
+    d = Decider(WRAPPED).decide(parse(chat(text)))
+    assert [s for s in d.signals if s.startswith("kw:")] == ["kw:root cause"]
+
+
+def test_wrapped_message_without_instruction_is_skipped_and_ordinary_messages_still_count():
+    d = Decider(WRAPPED).decide(parse(chat(f"{SKILL}\n\n{SKILL_BODY}", "please refactor this")))
+    assert _scored(d) == ("kw:refactor", "wrapped")

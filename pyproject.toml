@@ -1,6 +1,6 @@
 [project]
 name = "pinball"
-version = "0.2.0"
+version = "0.3.0"
 description = "Automatic model selection for agentgateway, as an HTTP ext_authz service"
 readme = "README.md"
 license = "Apache-2.0"

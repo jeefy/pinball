@@ -59,6 +59,12 @@ scored.
 `score < thresholds.standard` is light and `score >= thresholds.heavy` is
 heavy. Everything in between is standard.
 
+Clients that paste scaffolding into user messages (an agent loading a skill
+file as a user turn, say) would otherwise score as if the user wrote it.
+`wrapped_user_messages` lists such prefixes: the message still counts toward
+prompt size, but only the user's instruction inside it is scored, and the
+decision gets a `wrapped` signal.
+
 Because the message part is a maximum over the whole history, a conversation
 can move up a tier but never down. That avoids thrashing the prompt cache,
 and it needs no session state, so every replica gives the same answer.
@@ -72,7 +78,8 @@ gateway forwards it, overrides the score.
 
 All of this lives in [`pinball.yaml`](pinball.yaml): the model pool with
 prompt windows, per-tier preference order, thresholds, signal points and
-cutoffs (`scoring`, every key optional), headroom and keyword lists. Mount your own copy and point `PINBALL_CONFIG` at it.
+cutoffs (`scoring`, every key optional), wrapped user messages, headroom and
+keyword lists. Mount your own copy and point `PINBALL_CONFIG` at it.
 
 ## Running
 
