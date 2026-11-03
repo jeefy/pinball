@@ -63,7 +63,7 @@ SELECT r.id::text AS id, r.attributes_json->>'pinball.tier' AS tier,
     + CALLER_COL
     + """ AS caller
 FROM request_logs r JOIN request_log_payloads p ON p.log_id = r.id
-WHERE r.attributes_json->>'agw.ai.original_model' = 'auto'
+WHERE r.attributes_json->>'agw.ai.original_model' IN ('auto', 'pinball')
   AND r.http_status BETWEEN 200 AND 299 AND r.error IS NULL
   AND r.started_at > now() - make_interval(days => %(days)s)
   AND r.attributes_json->>'pinball.tier' IN ('light', 'standard', 'heavy')
@@ -99,7 +99,7 @@ SELECT count(*) AS requests,
   coalesce(sum(r.cost), 0)::float8 AS cost,
   count(r.cost) AS priced
 FROM request_logs r
-WHERE r.attributes_json->>'agw.ai.original_model' = 'auto'
+WHERE r.attributes_json->>'agw.ai.original_model' IN ('auto', 'pinball')
   AND r.started_at >= %(start)s AND r.started_at < %(end)s
 """
     + _EXCLUDE
