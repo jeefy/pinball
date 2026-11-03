@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fake_gitea import FakeGitea, Repo
+from fake_gitea import FakeGitea, Repo, mounted_key
 from test_callers import ENV, CallerGateway, bot_db
 from test_discovery import CATALOG, TOKEN, repo_files, staged_carrier
 from test_optimize import NOW, SECRET, env_for
@@ -23,7 +23,7 @@ BUDGET = 5.0
 
 def night(tmp_path: Path, repo: Repo, gw: CallerGateway) -> tuple[int, str, list[dict[str, Any]]]:
     cands = tmp_path / "candidates.yaml"
-    cands.write_text(repo.files.get(PATHS["candidates"], ""))
+    cands.write_text(mounted_key(repo.files.get(PATHS["candidates"], "")))
     audit = tmp_path / "audit.jsonl"
     out = io.StringIO()
     with FakeGitea(repo) as fake:

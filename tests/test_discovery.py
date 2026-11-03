@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fake_gitea import FakeGitea, Repo
+from fake_gitea import FakeGitea, Repo, mounted_key
 from test_carrier_edit import ROOT, carrier
 from test_optimize import NOW, FakeGateway, env_for, traffic
 
@@ -200,7 +200,7 @@ def staged_carrier() -> CarrierFiles:
 
 def nightly(tmp_path: Path, repo: Repo, argv: list[str], gw: FakeGateway | None, **env: str):
     cands = tmp_path / "candidates.yaml"
-    cands.write_text(repo.files.get(PATHS["candidates"], ""))
+    cands.write_text(mounted_key(repo.files.get(PATHS["candidates"], "")))
     out = io.StringIO()
     with FakeGitea(repo) as fake:
         e = env_for(
