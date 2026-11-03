@@ -15,13 +15,13 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md LICENSE ./
-RUN uv sync --locked --no-dev --no-install-project
+RUN uv sync --locked --no-dev --extra optimize --no-install-project
 
 COPY pinball.yaml ./
 COPY src ./src
 # Non-editable: pinball and its force-included pinball.yaml land in
 # site-packages, so the venv does not depend on /app/src.
-RUN uv sync --locked --no-dev --no-editable
+RUN uv sync --locked --no-dev --extra optimize --no-editable
 
 FROM base
 
