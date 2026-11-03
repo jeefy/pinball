@@ -1,6 +1,6 @@
 [project]
 name = "pinball"
-version = "0.4.0"
+version = "0.6.1"
 description = "Automatic model selection for agentgateway, as an HTTP ext_authz service"
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,6 +22,10 @@ dependencies = [
     "uvicorn>=0.32",
 ]
 
+[project.optional-dependencies]
+# Nightly `pinball-optimize` job only; the serving image installs without it.
+optimize = ["psycopg[binary]>=3.2"]
+
 [project.urls]
 Homepage = "https://github.com/jeefy/pinball"
 Source = "https://github.com/jeefy/pinball"
@@ -29,10 +33,13 @@ Issues = "https://github.com/jeefy/pinball/issues"
 
 [project.scripts]
 pinball = "pinball.main:main"
+pinball-optimize = "pinball.optimize.cli:main"
 
 [dependency-groups]
 dev = [
     "httpx2>=0.1",
+    # pyright resolves pinball.optimize.db against it; not in the serving image.
+    "psycopg[binary]>=3.2",
     "pyright>=1.1.390",
     "pytest>=8.0",
     "pytest-cov>=6.0",

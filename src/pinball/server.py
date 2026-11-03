@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Final
 
@@ -29,6 +31,8 @@ from prometheus_client import (
 from pinball.config import Tier
 from pinball.decide import Decider, Decision
 from pinball.features import BodyError, parse
+from pinball.overlay import Active
+from pinball.reload import Reloader, ReloadMetrics
 
 log = logging.getLogger("pinball")
 
@@ -48,6 +52,7 @@ class Metrics:
     errors: Counter
     seconds: Histogram
     body_bytes: Histogram
+    reload: ReloadMetrics
 
     @classmethod
     def create(cls) -> Metrics:
@@ -76,6 +81,7 @@ class Metrics:
                 buckets=(1e3, 1e4, 1e5, 1e6, 4e6, 16e6),
                 registry=r,
             ),
+            reload=ReloadMetrics.create(r),
         )
 
 
@@ -101,11 +107,44 @@ def _hint(raw: str) -> Tier | None:
         return None
 
 
-def create_app(decider: Decider, metrics: Metrics) -> FastAPI:
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+def create_app(
+    source: Decider | Reloader, metrics: Metrics, reload_interval: float | None = None
+) -> FastAPI:
+    """`source` is a fixed Decider, or a Reloader whose active state is read per request.
 
-    def decide(body: bytes, hint: Tier | None, floor: Tier | None) -> Decision:
-        return decider.decide(parse(body), hint, floor)
+    With a Reloader and `reload_interval`, the app polls the overlay in the
+    background for its lifetime.
+    """
+    if isinstance(source, Decider):
+        fixed = Active(source, {}, "")
+
+        def current() -> Active:
+            return fixed
+    else:
+        reloader = source
+
+        def current() -> Active:
+            return reloader.active
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if isinstance(source, Reloader) and reload_interval is not None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(source.run, reload_interval)
+                yield
+                tg.cancel_scope.cancel()
+        else:
+            yield
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+    def decide(
+        body: bytes, hint: Tier | None, floor: Tier | None, caller: str
+    ) -> tuple[Decision, str, str]:
+        # Read the reference once: the whole request uses one consistent state.
+        active = current()
+        decider, profile = active.select(caller)
+        return decider.decide(parse(body), hint, floor), active.version, profile
 
     @app.get("/healthz")
     async def healthz() -> Response:
@@ -126,11 +165,12 @@ def create_app(decider: Decider, metrics: Metrics) -> FastAPI:
         listener = _header(request, LISTENER_HEADER)
         try:
             # Parsing a multi-MB body is CPU work; keep /healthz responsive.
-            decision = await anyio.to_thread.run_sync(
+            decision, overlay, profile = await anyio.to_thread.run_sync(
                 decide,
                 body,
                 _hint(_header(request, HINT_HEADER)),
                 _hint(_header(request, MIN_TIER_HEADER)),
+                caller,
             )
         except BodyError as e:
             metrics.skipped.labels(reason=e.reason).inc()
@@ -148,7 +188,7 @@ def create_app(decider: Decider, metrics: Metrics) -> FastAPI:
             metrics.signals.labels(signal=s.split(":", 1)[0]).inc()
         log.info(
             "decide tier=%s model=%s score=%d est_tokens=%d body_bytes=%d ms=%.1f "
-            "listener=%s caller=%s reason=%s",
+            "listener=%s caller=%s overlay=%s profile=%s reason=%s",
             decision.tier,
             decision.model,
             decision.score,
@@ -157,6 +197,8 @@ def create_app(decider: Decider, metrics: Metrics) -> FastAPI:
             elapsed * 1000,
             listener,
             caller,
+            overlay or "-",
+            profile or "-",
             decision.reason,
         )
         return _reply(
