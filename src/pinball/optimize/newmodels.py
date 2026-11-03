@@ -24,7 +24,7 @@ from pinball.optimize.carrier_edit import ModelId
 from pinball.optimize.discover import CatalogModel, new_models, parse_catalog
 from pinball.optimize.evaluate import Verdict, evaluate
 from pinball.optimize.gateway import Budget, Gateway
-from pinball.optimize.invariants import candidate_lists, pool_ids
+from pinball.optimize.invariants import candidate_lists, mounted_lists, pool_ids
 from pinball.optimize.sample import Sample
 from pinball.optimize.settings import Settings
 
@@ -48,7 +48,7 @@ class Night:
 def _evaluable(path: Path | None) -> tuple[ModelId, ...]:
     if path is None or not path.is_file():
         return ()
-    return candidate_lists(path.read_text(encoding="utf-8")).candidates
+    return mounted_lists(path.read_text(encoding="utf-8")).candidates
 
 
 def _rates(settings: Settings, mid: str) -> tuple[str, str]:

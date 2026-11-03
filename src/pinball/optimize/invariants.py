@@ -56,7 +56,18 @@ class Lists:
 
 
 def candidate_lists(text: str) -> Lists:
-    data = configmap_data(text, "candidates.yaml")
+    return lists_from(configmap_data(text, "candidates.yaml"))
+
+
+def mounted_lists(text: str) -> Lists:
+    """The ConfigMap key as mounted in the pod: a bare mapping, not a manifest."""
+    data = yaml.safe_load(text) or {}
+    if not isinstance(data, dict):
+        raise InvariantError("candidates.yaml is not a mapping")
+    return lists_from(data)
+
+
+def lists_from(data: dict[str, Any]) -> Lists:
     entries = data.get("candidates") or []
     ids = tuple(model_id(str(e["id"])) for e in entries)
     added = {model_id(str(e["id"])): str(e.get("added", "")) for e in entries}

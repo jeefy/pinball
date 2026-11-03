@@ -12,6 +12,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+import yaml
+
+
+def mounted_key(manifest: str, key: str = "candidates.yaml") -> str:
+    """What the pod sees: the ConfigMap data key's content, not the whole manifest."""
+    for doc in yaml.safe_load_all(manifest):
+        if isinstance(doc, dict) and key in (doc.get("data") or {}):
+            return str(doc["data"][key])
+    return ""
+
 
 @dataclass
 class Repo:
