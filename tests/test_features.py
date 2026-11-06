@@ -115,6 +115,9 @@ def test_responses_api_items_skip_function_call_output():
         ({"reasoning_effort": "xhigh"}, Effort.HIGH),
         ({"output_config": {"effort": "medium"}}, Effort.MEDIUM),
         ({"thinking": {"type": "enabled", "budget_tokens": 2000}}, Effort.MEDIUM),
+        ({"thinking": {"budget_tokens": 20000}}, Effort.HIGH),
+        ({"thinking_config": {"thinking_budget": 20000}}, Effort.HIGH),
+        ({"thinking_config": {"thinking_budget": 4000}}, Effort.MEDIUM),
         ({"reasoning_effort": "bogus"}, None),
         ({}, None),
     ],
@@ -144,6 +147,25 @@ def test_estimated_tokens_include_tools_and_images():
     }
     # When / Then
     assert parse(body(doc)).est_prompt_tokens == 100 + 1600
+
+
+@pytest.mark.parametrize("block_type", ["document", "file", "audio", "input_audio"])
+def test_multimodal_documents_and_audio_count_as_media(block_type: str):
+    doc = {
+        "model": "auto",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": block_type, "data": "..."},
+                ],
+            }
+        ],
+    }
+    f = parse(body(doc))
+    assert f.images == 1
+    assert f.est_prompt_tokens > 1600
 
 
 @pytest.mark.parametrize("raw", [b"not json", b"[1,2]", b""])

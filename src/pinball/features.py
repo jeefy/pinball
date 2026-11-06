@@ -181,6 +181,8 @@ def _block(block: Json, acc: _Acc, user: list[str] | None) -> None:
             _content(rest.get("output"), acc, None)
         case {"type": "thinking", "thinking": str(t)}:
             acc.text_chars += len(t)
+        case {"type": "document" | "file" | "audio" | "input_audio"}:
+            acc.images += 1
         case {"type": "tool_use", **rest}:
             _measure(rest.get("input"), acc)
         case {"type": "function_call", **rest}:
@@ -207,6 +209,10 @@ def _effort(doc: dict[str, Json]) -> Effort | None:
             return _EFFORT_WORDS.get(word.lower())
         case {"output_config": {"effort": str(word)}}:
             return _EFFORT_WORDS.get(word.lower())
+        case {"thinking_config": {"thinking_budget": int(budget)}}:
+            return Effort.HIGH if budget >= THINKING_HIGH_BUDGET else Effort.MEDIUM
+        case {"thinking": {"budget_tokens": int(budget)}}:
+            return Effort.HIGH if budget >= THINKING_HIGH_BUDGET else Effort.MEDIUM
         case {"thinking": {"type": "enabled", "budget_tokens": int(budget)}}:
             return Effort.HIGH if budget >= THINKING_HIGH_BUDGET else Effort.MEDIUM
         case _:
