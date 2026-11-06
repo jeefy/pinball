@@ -41,6 +41,7 @@ MIN_TIER_HEADER: Final = "x-pinball-min-tier"
 CALLER_HEADER: Final = "x-agw-caller"
 LISTENER_HEADER: Final = "x-pinball-listener"
 _JSON: Final = "application/json"
+INLINE_BODY_LIMIT_BYTES: Final = 16384
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,14 +165,18 @@ def create_app(
         caller = _header(request, CALLER_HEADER)
         listener = _header(request, LISTENER_HEADER)
         try:
-            # Parsing a multi-MB body is CPU work; keep /healthz responsive.
-            decision, overlay, profile = await anyio.to_thread.run_sync(
-                decide,
-                body,
-                _hint(_header(request, HINT_HEADER)),
-                _hint(_header(request, MIN_TIER_HEADER)),
-                caller,
-            )
+            hint = _hint(_header(request, HINT_HEADER))
+            floor = _hint(_header(request, MIN_TIER_HEADER))
+            if len(body) <= INLINE_BODY_LIMIT_BYTES:
+                decision, overlay, profile = decide(body, hint, floor, caller)
+            else:
+                decision, overlay, profile = await anyio.to_thread.run_sync(
+                    decide,
+                    body,
+                    hint,
+                    floor,
+                    caller,
+                )
         except BodyError as e:
             metrics.skipped.labels(reason=e.reason).inc()
             log.info("skip reason=%r body_bytes=%d listener=%s", e.reason, len(body), listener)

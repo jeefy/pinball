@@ -90,3 +90,10 @@ def test_metrics_count_decisions(client: TestClient):
 
 def test_healthz(client: TestClient):
     assert client.get("/healthz").json() == {"ok": True}
+
+
+def test_large_body_uses_threadpool_path(client: TestClient):
+    padding = "a" * 20000
+    r = client.post("/check", content=chat(f"hello {padding}"))
+    assert r.status_code == 200
+    assert r.json()["model"] != ""
