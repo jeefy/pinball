@@ -47,6 +47,34 @@ def test_postgres_db_query_and_methods():
         mock_conn.close.assert_called_once()
 
 
+def test_postgres_db_connect_retry_and_exhaustion():
+    import psycopg
+
+    mock_conn = MagicMock()
+    with (
+        patch(
+            "psycopg.connect",
+            side_effect=[psycopg.OperationalError("down"), mock_conn],
+        ) as mock_connect,
+        patch("time.sleep") as mock_sleep,
+    ):
+        db = PostgresDb("postgresql://fake:5432/db", retries=2, retry_delay=0.1)
+        assert db._conn == mock_conn
+        assert mock_connect.call_count == 2
+        mock_sleep.assert_called_once_with(0.1)
+
+    with (
+        patch(
+            "psycopg.connect",
+            side_effect=psycopg.OperationalError("fatal"),
+        ) as mock_connect_fail,
+        patch("time.sleep"),
+        pytest.raises(psycopg.OperationalError),
+    ):
+        PostgresDb("postgresql://fake:5432/db", retries=2, retry_delay=0.1)
+    assert mock_connect_fail.call_count == 2
+
+
 def test_fake_db_window_fallback():
     fakedb = FakeDb(windows=[(datetime(2026, 1, 1), datetime(2026, 1, 2), Window(5, 0, 0.01, 5))])
     fallback = fakedb.window(datetime(2026, 2, 1), datetime(2026, 2, 2))

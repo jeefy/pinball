@@ -111,10 +111,23 @@ WINDOW_CALLER_SQL: LiteralString = WINDOW_SQL + "  AND " + CALLER_COL + " = %(ca
 class PostgresDb:
     """psycopg connection in read-only mode; DSN from PINBALL_OPT_DB_DSN."""
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, retries: int = 3, retry_delay: float = 0.5) -> None:
+        import time
+
         import psycopg  # optional extra: only the nightly job needs it
 
-        self._conn = psycopg.connect(dsn, autocommit=False)
+        conn = None
+        for attempt in range(retries):
+            try:
+                conn = psycopg.connect(dsn, autocommit=False)
+                break
+            except psycopg.OperationalError:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(retry_delay * (2**attempt))
+        if conn is None:
+            conn = psycopg.connect(dsn, autocommit=False)
+        self._conn = conn
         self._conn.read_only = True
 
     def _query(self, sql: LiteralString, params: dict[str, Any]) -> list[dict[str, Any]]:
