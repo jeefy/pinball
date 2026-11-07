@@ -329,6 +329,10 @@ curl -s localhost:9201/check -d '{"model":"auto","messages":[{"role":"user","con
 | `GET /healthz` | liveness/readiness |
 | `GET /metrics` | `pinball_decisions_total{tier,model}`, `pinball_signals_total{signal}`, `pinball_skipped_total{reason}`, `pinball_errors_total`, `pinball_decide_seconds`, `pinball_body_bytes`, `pinball_overlay_info{version}`, `pinball_overlay_generated_timestamp_seconds`, `pinball_overlay_reload_total{result}`, `pinball_overlay_reload_errors_total{reason}` |
 
+Set `reply_signals: true` in the config to add `"signals": [...]` to the reply:
+the signal names behind the decision (e.g. `["short", "min_tier"]`, no values, no
+request content), so the gateway can copy them into `extauthz.signals`. Off by default.
+
 Each decision is logged as one line with tier, model, score, estimated tokens,
 body size, latency and signal names. Message content and credentials are
 never logged.

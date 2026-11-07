@@ -86,7 +86,14 @@ class Metrics:
         )
 
 
-def _reply(model: str, tier: str, reason: str, score: int = 0, est_tokens: int = 0) -> Response:
+def _reply(
+    model: str,
+    tier: str,
+    reason: str,
+    score: int = 0,
+    est_tokens: int = 0,
+    signals: tuple[str, ...] | None = None,
+) -> Response:
     payload = {
         "model": model,
         "tier": tier,
@@ -94,11 +101,18 @@ def _reply(model: str, tier: str, reason: str, score: int = 0, est_tokens: int =
         "score": score,
         "est_tokens": est_tokens,
     }
+    if signals is not None:
+        payload["signals"] = list(signals)
     return Response(orjson.dumps(payload), media_type=_JSON)
 
 
 def _header(request: Request, name: str) -> str:
     return request.headers.get(name, "")[:64]
+
+
+def _signal_names(decision: Decision) -> tuple[str, ...]:
+    # names only ("min_tier:heavy" -> "min_tier"): same cardinality as the metric, no content
+    return tuple(s.split(":", 1)[0] for s in decision.signals)
 
 
 def _hint(raw: str) -> Tier | None:
@@ -109,7 +123,10 @@ def _hint(raw: str) -> Tier | None:
 
 
 def create_app(
-    source: Decider | Reloader, metrics: Metrics, reload_interval: float | None = None
+    source: Decider | Reloader,
+    metrics: Metrics,
+    reload_interval: float | None = None,
+    reply_signals: bool = False,
 ) -> FastAPI:
     """`source` is a fixed Decider, or a Reloader whose active state is read per request.
 
@@ -212,6 +229,7 @@ def create_app(
             decision.reason,
             decision.score,
             decision.est_tokens,
+            _signal_names(decision) if reply_signals else None,
         )
 
     return app
