@@ -26,7 +26,7 @@ def add(
     age_h=1,
     status=200,
     user="alice",
-    cost=0.5,
+    cost: float | None = 0.5,
     tier="light",
     orig="auto",
     req=None,
