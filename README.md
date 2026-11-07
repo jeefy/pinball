@@ -233,7 +233,7 @@ report carries the agentic share per tier, and a tier whose agentic share is
 
 | Variable | Default |
 | --- | --- |
-| `PINBALL_OPT_DB_DSN` | required (read-only role recommended) |
+| `PINBALL_OPT_DB_DSN` | required: Postgres DSN (read-only role recommended) or `sqlite:///path.db` / `sqlite:////abs/path.db` (agentgateway SQLite store, opened read-only) |
 | `PINBALL_OPT_GATEWAY_URL` | required for `run` (not for dry-run/check) |
 | `PINBALL_OPT_GATEWAY_TIMEOUT` | `300` s |
 | `PINBALL_OPT_BUDGET_USD` | `20.0` |

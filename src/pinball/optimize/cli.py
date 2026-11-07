@@ -42,7 +42,7 @@ from pinball.optimize.callers_run import (
     save_night,
     with_callers,
 )
-from pinball.optimize.db import TIERS, PostgresDb, ReplayDb
+from pinball.optimize.db import TIERS, ReplayDb, open_db
 from pinball.optimize.deps import Deps
 from pinball.optimize.discovery_cli import (
     DiscoveryEnv,
@@ -232,7 +232,7 @@ def main(
     if real_run and not settings.gateway_url and gateway_factory is None:
         print("PINBALL_OPT_GATEWAY_URL is required", file=sys.stderr)
         return EXIT_CONFIG
-    db = (db_factory or PostgresDb)(settings.db_dsn)
+    db = (db_factory or open_db)(settings.db_dsn)
     gateway = None
     if real_run:
         gateway = (gateway_factory or _http_gateway)(settings)
