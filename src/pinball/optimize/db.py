@@ -6,6 +6,8 @@ production, `FakeDb` in tests. Every query runs in a READ ONLY transaction.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -157,6 +159,103 @@ class PostgresDb:
 
     def close(self) -> None:
         self._conn.close()
+
+
+# SQLite flavour (agentgateway's built-in store, v1.6.0 schema: TEXT ids, ISO-8601 UTC
+# started_at, JSON as TEXT). GLOB keeps the eval-*/pinball-* exclusion case-sensitive like LIKE
+# on Postgres. shortcut: `days`/window bounds go through julianday(), no index use; fine
+# for a local log, upgrade if the table gets large.
+_S_CALLER: LiteralString = "substr(coalesce(r.agentgateway_user, ''), 1, 64)"
+_S_AUTO: LiteralString = (
+    "json_extract(r.attributes_json, '$.\"agw.ai.original_model\"') IN ('auto', 'pinball')"
+)
+_S_EXCLUDE: LiteralString = """
+  AND coalesce(r.agentgateway_user, '') NOT GLOB 'eval-*'
+  AND coalesce(r.agentgateway_user, '') NOT GLOB 'pinball-*'
+"""
+_S_TIER: LiteralString = "json_extract(r.attributes_json, '$.\"pinball.tier\"')"
+
+SQLITE_POOL_SQL: LiteralString = (
+    f"SELECT r.id AS id, {_S_TIER} AS tier, {_S_CALLER} AS caller\n"
+    + f"""FROM request_logs r JOIN request_log_payloads p ON p.log_id = r.id
+WHERE {_S_AUTO}
+  AND r.http_status BETWEEN 200 AND 299 AND r.error IS NULL
+  AND julianday(r.started_at) > julianday('now', '-' || :days || ' days')
+  AND {_S_TIER} IN ('light', 'standard', 'heavy')
+  AND json_valid(p.request_prompt_json) AND json_type(p.request_prompt_json) = 'array'
+  AND json_extract(p.request_prompt_json, '$[#-1].role') = 'user'
+  AND length(trim(coalesce(json_extract(p.request_prompt_json, '$[#-1].content'), ''))) > 0
+  AND json_valid(p.response_completion_json) AND json_type(p.response_completion_json) = 'array'
+  AND length(trim(coalesce(json_extract(p.response_completion_json, '$[0]'), ''))) > 0
+"""
+    + _S_EXCLUDE
+    + "ORDER BY r.id"
+)
+
+SQLITE_PAYLOADS_SQL: LiteralString = f"""
+SELECT r.id AS id, {_S_TIER} AS tier, {_S_CALLER} AS caller,
+  json_extract(r.attributes_json, '$."pinball.reason"') AS reason,
+  json_extract(r.attributes_json, '$."pinball.model"') AS pinball_model,
+  r.gen_ai_response_model AS served_model, r.input_tokens, r.output_tokens,
+  p.request_prompt_json AS request, p.response_completion_json AS response
+FROM request_logs r JOIN request_log_payloads p ON p.log_id = r.id
+WHERE r.id IN (SELECT value FROM json_each(:ids))
+"""
+
+SQLITE_WINDOW_SQL: LiteralString = (
+    f"""
+SELECT count(*) AS requests,
+  coalesce(sum(r.http_status NOT BETWEEN 200 AND 299), 0) AS errors,
+  coalesce(sum(r.cost), 0.0) AS cost,
+  count(r.cost) AS priced
+FROM request_logs r
+WHERE {_S_AUTO}
+  AND julianday(r.started_at) >= julianday(:start) AND julianday(r.started_at) < julianday(:end)
+"""
+    + _S_EXCLUDE
+)
+
+SQLITE_WINDOW_CALLER_SQL: LiteralString = SQLITE_WINDOW_SQL + f"  AND {_S_CALLER} = :caller\n"
+
+
+class SqliteDb:
+    """Read-only SQLite connection; DSN `sqlite:///relative.db` or `sqlite:////abs/path.db`."""
+
+    def __init__(self, dsn: str) -> None:
+        path = dsn.removeprefix("sqlite://").removeprefix("/")
+        self._conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        self._conn.row_factory = sqlite3.Row
+
+    def _query(self, sql: LiteralString, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def pool(self, days: int) -> list[dict[str, Any]]:
+        return self._query(SQLITE_POOL_SQL, {"days": int(days)})
+
+    def payloads(self, ids: Sequence[str]) -> list[dict[str, Any]]:
+        rows = self._query(SQLITE_PAYLOADS_SQL, {"ids": json.dumps(list(ids))})
+        for r in rows:  # Postgres returns jsonb already decoded
+            r["request"] = json.loads(r["request"])
+            r["response"] = json.loads(r["response"])
+        return rows
+
+    def window(self, start: datetime, end: datetime, caller: str | None = None) -> Window:
+        params: dict[str, Any] = {"start": start.isoformat(), "end": end.isoformat()}
+        if caller is None:
+            row = self._query(SQLITE_WINDOW_SQL, params)[0]
+        else:
+            row = self._query(SQLITE_WINDOW_CALLER_SQL, {**params, "caller": caller})[0]
+        return Window(
+            int(row["requests"]), int(row["errors"]), float(row["cost"]), int(row["priced"])
+        )
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def open_db(dsn: str) -> ReplayDb:
+    """`sqlite://` DSNs open SqliteDb, anything else PostgresDb."""
+    return SqliteDb(dsn) if dsn.startswith("sqlite://") else PostgresDb(dsn)
 
 
 @dataclass
