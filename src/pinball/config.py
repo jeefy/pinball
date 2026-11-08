@@ -95,6 +95,7 @@ class Config(BaseModel):
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()
+    reply_signals: bool = False  # opt-in: add signal names (no content) to the /check reply
 
     @model_validator(mode="after")
     def _tiers_reference_pool(self) -> Self:

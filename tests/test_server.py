@@ -97,3 +97,16 @@ def test_large_body_uses_threadpool_path(client: TestClient):
     r = client.post("/check", content=chat(f"hello {padding}"))
     assert r.status_code == 200
     assert r.json()["model"] != ""
+
+
+def test_reply_has_no_signals_by_default(client: TestClient):
+    assert "signals" not in client.post("/check", content=chat("hi")).json()
+
+
+def test_reply_signals_opt_in_lists_names_only(metrics: Metrics):
+    app = create_app(Decider(load_config()), metrics, reply_signals=True)
+    r = TestClient(app).post(
+        "/check", content=chat("hi"), headers={"x-pinball-min-tier": "standard"}
+    )
+    assert r.json()["signals"] == ["short", "min_tier"]
+    assert TestClient(app).post("/check", content=b"nope").json().get("signals") is None
