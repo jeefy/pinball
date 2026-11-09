@@ -4,7 +4,8 @@ Stickiness without state: the per-message part of the score is the maximum
 over every user-authored message in the conversation. Conversations only grow,
 so that maximum never falls and a session never steps down a tier (no prompt
 cache thrash). It can step up when the user asks for something harder. The
-context-window fit is monotonic for the same reason. Both replicas compute
+context-window fit and the context-size signal are monotonic for the same
+reason (estimated prompt tokens only grow). Both replicas compute
 the same answer for the same body.
 """
 
@@ -176,4 +177,11 @@ def _score_request(features: Features, s: Scoring) -> tuple[int, list[str]]:
     if features.structured:
         score += s.structured
         signals.append("structured")
+    est = features.est_prompt_tokens
+    if s.very_large_context_tokens is not None and est >= s.very_large_context_tokens:
+        score += s.very_large_context
+        signals.append("context:very_large")
+    elif s.large_context_tokens is not None and est >= s.large_context_tokens:
+        score += s.large_context
+        signals.append("context:large")
     return score, signals

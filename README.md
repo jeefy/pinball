@@ -55,6 +55,7 @@ scored.
 | reasoning effort none/minimal/low | −1 | `effort_low` |
 | max output tokens ≤ 512 | −1 | `small_output_tokens`, `small_output` |
 | JSON response format | −1 | `structured` |
+| estimated prompt ≥ `large_context_tokens` / ≥ `very_large_context_tokens` (whole request, off unless set) | +1 / +2 | `large_context_tokens`, `large_context`, `very_large_context_tokens`, `very_large_context` |
 
 `score < thresholds.standard` is light and `score >= thresholds.heavy` is
 heavy. Everything in between is standard.

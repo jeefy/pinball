@@ -61,9 +61,19 @@ class Scoring(BaseModel):
     small_output_tokens: int = Field(default=512, ge=0)
     small_output: int = -1
     structured: int = -1
+    # Whole-request size (estimated prompt tokens); unset = off.
+    large_context_tokens: int | None = Field(default=None, gt=0)
+    large_context: int = 1
+    very_large_context_tokens: int | None = Field(default=None, gt=0)
+    very_large_context: int = 2
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
+        small, big = self.large_context_tokens, self.very_large_context_tokens
+        if big is not None and (small is None or big <= small):
+            raise ValueError(
+                "scoring.very_large_context_tokens needs a smaller large_context_tokens"
+            )
         if self.very_long_chars <= self.long_chars:
             raise ValueError("scoring.very_long_chars must be greater than scoring.long_chars")
         return self
