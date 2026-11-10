@@ -110,3 +110,8 @@ def test_reply_signals_opt_in_lists_names_only(metrics: Metrics):
     )
     assert r.json()["signals"] == ["short", "min_tier"]
     assert TestClient(app).post("/check", content=b"nope").json().get("signals") is None
+
+
+def test_reply_has_score_and_est_tokens(client: TestClient):
+    body = client.post("/check", content=chat("hi " * 500)).json()
+    assert isinstance(body["score"], int) and body["est_tokens"] > 0

@@ -251,3 +251,27 @@ def test_wrapped_instruction_keeps_its_own_signals_and_stops_at_the_end_marker()
 def test_wrapped_message_without_instruction_is_skipped_and_ordinary_messages_still_count():
     d = Decider(WRAPPED).decide(parse(chat(f"{SKILL}\n\n{SKILL_BODY}", "please refactor this")))
     assert _scored(d) == ("kw:refactor", "wrapped")
+
+
+def _ctx_decider(**scoring: int) -> Decider:
+    return Decider(CONFIG.model_copy(update={"scoring": CONFIG.scoring.model_copy(update=scoring)}))
+
+
+def test_context_signal_is_off_by_default():
+    d = decide(chat("a " * 7000))
+    assert not any(s.startswith("context:") for s in d.signals)
+
+
+def test_context_size_adds_points_and_never_falls_as_conversation_grows():
+    dec = _ctx_decider(large_context_tokens=100, very_large_context_tokens=1000)
+    msg = "short " * 20
+    scores = [dec.decide(parse(chat(*[msg] * n))) for n in (1, 5, 50, 200)]
+    assert [d.score for d in scores] == sorted(d.score for d in scores)
+    assert "context:large" in scores[1].signals and "context:very_large" not in scores[1].signals
+    assert "context:very_large" in scores[-1].signals
+    assert scores[-1].score - scores[0].score == 2
+
+
+def test_very_large_context_needs_large_context():
+    with pytest.raises(ValueError, match="very_large_context_tokens"):
+        CONFIG.scoring.model_validate({"very_large_context_tokens": 10})

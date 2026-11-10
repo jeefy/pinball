@@ -20,6 +20,8 @@ frontendPolicies:
       pinball.model: 'default(extauthz.model, null)'
       pinball.tier: 'default(extauthz.tier, null)'
       pinball.reason: 'default(extauthz.reason, null)'
+      pinball.score: 'default(extauthz.score, null)'
+      pinball.est_tokens: 'default(extauthz.est_tokens, null)'
 
 llm:
   port: 4000
