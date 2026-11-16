@@ -63,6 +63,13 @@ def text_of(content: Any) -> str:
     return ""
 
 
+def message_text(message: Any) -> str:
+    """Text of a logged message: `content` (older gateways) or `parts` (agentgateway 1.6.0)."""
+    if isinstance(message, dict):
+        return text_of(message["content"] if "content" in message else message.get("parts"))
+    return text_of(message)
+
+
 def _int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -80,7 +87,7 @@ def normalize_payload(row: dict[str, Any]) -> Sample | None:
     for message in request:
         if not isinstance(message, dict):
             continue
-        role, text = str(message.get("role")), text_of(message.get("content"))
+        role, text = str(message.get("role")), message_text(message)
         if role not in KEEP_ROLES:
             agentic = agentic or role in ("tool", "function")
             continue
@@ -92,10 +99,10 @@ def normalize_payload(row: dict[str, Any]) -> Sample | None:
             turns[-1] = {"role": mapped, "content": f"{turns[-1]['content']}\n\n{text}"}
         else:
             turns.append({"role": mapped, "content": text})
-    served = "\n".join(text_of(part) for part in response).strip()
+    served = "\n".join(message_text(part) for part in response).strip()
     last = request[-1] if request else None
     last_is_user_text = (
-        isinstance(last, dict) and last.get("role") == "user" and bool(text_of(last.get("content")))
+        isinstance(last, dict) and last.get("role") == "user" and bool(message_text(last))
     )
     if not turns or turns[-1]["role"] != "user" or not last_is_user_text or not served:
         return None

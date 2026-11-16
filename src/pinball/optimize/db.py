@@ -1,5 +1,9 @@
 """Read-only access to the agentgateway request log.
 
+Prompts are logged either as `{"role", "content"}` messages (older gateways) or as
+`{"role", "parts": [{"type": "text", "text"}]}` messages (agentgateway 1.6.0, which also
+logs the completion as a list of such messages); the pool filters accept both.
+
 `ReplayDb` is the seam: `PostgresDb` (psycopg, optional extra `optimize`) in
 production, `FakeDb` in tests. Every query runs in a READ ONLY transaction.
 """
@@ -58,6 +62,7 @@ _EXCLUDE: LiteralString = """
   AND coalesce(r.agentgateway_user, '') NOT LIKE 'pinball-%%'
 """
 
+# jsonpath string literals need the regex backslash doubled: `"\\\\S"` here is `"\\S"` in jsonpath.
 POOL_SQL: LiteralString = (
     """
 SELECT r.id::text AS id, r.attributes_json->>'pinball.tier' AS tier,
@@ -71,9 +76,14 @@ WHERE r.attributes_json->>'agw.ai.original_model' IN ('auto', 'pinball')
   AND r.attributes_json->>'pinball.tier' IN ('light', 'standard', 'heavy')
   AND jsonb_typeof(p.request_prompt_json) = 'array'
   AND p.request_prompt_json->-1->>'role' = 'user'
-  AND length(btrim(coalesce(p.request_prompt_json->-1->>'content', ''))) > 0
+  AND (length(btrim(coalesce(p.request_prompt_json->-1->>'content', ''))) > 0
+    OR jsonb_path_exists(p.request_prompt_json,
+         '$[last].parts[*] ? (@.type == "text" && @.text like_regex "\\\\S")'))
   AND jsonb_typeof(p.response_completion_json) = 'array'
-  AND length(btrim(coalesce(p.response_completion_json->>0, ''))) > 0
+  AND (jsonb_typeof(p.response_completion_json->0) <> 'object'
+       AND length(btrim(coalesce(p.response_completion_json->>0, ''))) > 0
+    OR jsonb_path_exists(p.response_completion_json,
+         '$[0].parts[*] ? (@.type == "text" && @.text like_regex "\\\\S")'))
 """
     + _EXCLUDE
     + "ORDER BY r.id"
@@ -184,9 +194,16 @@ WHERE {_S_AUTO}
   AND {_S_TIER} IN ('light', 'standard', 'heavy')
   AND json_valid(p.request_prompt_json) AND json_type(p.request_prompt_json) = 'array'
   AND json_extract(p.request_prompt_json, '$[#-1].role') = 'user'
-  AND length(trim(coalesce(json_extract(p.request_prompt_json, '$[#-1].content'), ''))) > 0
+  AND (length(trim(coalesce(json_extract(p.request_prompt_json, '$[#-1].content'), ''))) > 0
+    OR EXISTS (SELECT 1 FROM json_each(p.request_prompt_json, '$[#-1].parts') AS part
+               WHERE json_extract(part.value, '$.type') = 'text'
+                 AND length(trim(coalesce(json_extract(part.value, '$.text'), ''))) > 0))
   AND json_valid(p.response_completion_json) AND json_type(p.response_completion_json) = 'array'
-  AND length(trim(coalesce(json_extract(p.response_completion_json, '$[0]'), ''))) > 0
+  AND (json_type(p.response_completion_json, '$[0]') <> 'object'
+       AND length(trim(coalesce(json_extract(p.response_completion_json, '$[0]'), ''))) > 0
+    OR EXISTS (SELECT 1 FROM json_each(p.response_completion_json, '$[0].parts') AS part
+               WHERE json_extract(part.value, '$.type') = 'text'
+                 AND length(trim(coalesce(json_extract(part.value, '$.text'), ''))) > 0))
 """
     + _S_EXCLUDE
     + "ORDER BY r.id"

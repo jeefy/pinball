@@ -16,7 +16,7 @@ CREATE TABLE request_logs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, http_s
 CREATE TABLE request_log_payloads (log_id TEXT PRIMARY KEY REFERENCES request_logs(id),
   request_prompt_json TEXT, response_completion_json TEXT);
 """
-NOW = datetime(2026, 11, 7, 12, tzinfo=UTC)
+NOW = datetime.now(UTC)  # SQL filters on the real `now`, so a fixed date rots
 
 
 def add(
@@ -85,6 +85,27 @@ def test_pool_filters_like_postgres(db: SqliteDb):
     assert "old" not in [r["id"] for r in db.pool(7)]
     caller = {r["id"]: r["caller"] for r in db.pool(7)}["b"]
     assert caller == "x" * 64
+
+
+def parts(role: str, text: str) -> dict:
+    return {"role": role, "parts": [{"type": "text", "text": text}]}
+
+
+def test_pool_accepts_agentgateway_1_6_parts_shape(tmp_path: Path):
+    # Given rows logged the 1.6.0 way: prompt and completion are lists of {role, parts}
+    path = tmp_path / "parts.db"
+    c = sqlite3.connect(path)
+    c.executescript(SCHEMA)
+    add(c, "new", req=[parts("system", "s"), parts("user", "hi")], resp=[parts("assistant", "yo")])
+    add(c, "blank-user", req=[parts("user", "  ")], resp=[parts("assistant", "yo")])
+    add(c, "blank-reply", req=[parts("user", "hi")], resp=[parts("assistant", " ")])
+    add(c, "tool-call", req=[{"role": "user", "parts": [{"type": "toolCall", "name": "f"}]}])
+    c.commit()
+    c.close()
+    # When the pool is drawn
+    ids = [r["id"] for r in SqliteDb(f"sqlite:///{path}").pool(7)]
+    # Then only the row with replayable text in both prompt and completion is kept
+    assert ids == ["new"]
 
 
 def test_payloads_decode_json(db: SqliteDb):
