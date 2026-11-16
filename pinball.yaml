@@ -97,6 +97,20 @@ heavy_keywords:
   - distributed
   - invariant
   - investigate
+  # German (a trailing * matches any ending: migrier* -> migriert, migrieren)
+  - architektur
+  - ursache
+  - fehlerursache
+  - sicherheit
+  - sicherheitslücke
+  - migrier*
+  - optimier*
+  - nebenläufigkeit
+  - verteilt*
+  - abwägung
+  - beweis
+  - untersuch*
+  - refactoring
 light_keywords:
   - title
   - summarize
@@ -108,3 +122,7 @@ light_keywords:
   - one word
   - yes or no
   - tl;dr
+  - zusammenfass*
+  - übersetz*
+  - titel
+  - ja oder nein

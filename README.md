@@ -83,7 +83,8 @@ the tier. `x-pinball-tier` wins when both are present; invalid values are ignore
 All of this lives in [`pinball.yaml`](pinball.yaml): the model pool with
 prompt windows, per-tier preference order, thresholds, signal points and
 cutoffs (`scoring`, every key optional), wrapped user messages, headroom and
-keyword lists. Mount your own copy and point `PINBALL_CONFIG` at it.
+keyword lists (English and German; a trailing `*` matches any word ending, e.g.
+`migrier*`). Mount your own copy and point `PINBALL_CONFIG` at it.
 
 ## Learned overlay
 

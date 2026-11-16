@@ -123,10 +123,17 @@ class Config(BaseModel):
 
 
 def keyword_pattern(words: tuple[str, ...]) -> re.Pattern[str] | None:
-    """One case-insensitive alternation, longest first, on word boundaries."""
+    """One case-insensitive alternation, longest first, on word boundaries.
+
+    A trailing `*` matches any word ending (`migrier*` -> migriert, migrieren), for
+    languages with inflection.
+    """
     if not words:
         return None
-    alts = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+    alts = "|".join(
+        re.escape(w.removesuffix("*")) + (r"\w*" if w.endswith("*") else "")
+        for w in sorted(set(words), key=len, reverse=True)
+    )
     return re.compile(rf"(?<!\w)(?:{alts})(?!\w)", re.IGNORECASE)
 
 
