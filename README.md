@@ -85,6 +85,23 @@ prompt windows, per-tier preference order, thresholds, signal points and
 cutoffs (`scoring`, every key optional), wrapped user messages, headroom and
 keyword lists. Mount your own copy and point `PINBALL_CONFIG` at it.
 
+## Session stickiness
+
+The score never falls inside one conversation, but a reload that changes thresholds
+or a tier's order (overlay, config) can still move a running session to another
+model and drop its prompt cache. Opt in with a `sticky` block in `pinball.yaml`:
+
+```yaml
+sticky: {sessions: 1000, ttl_seconds: 3600}   # conversations remembered (LRU), idle expiry
+```
+
+pinball then remembers, per caller and conversation (a hash of the first user
+message; no text is stored), the tier and model it served. The remembered tier acts
+as a floor (`min_tier:<tier>`), and the remembered model is kept (`sticky`) while it
+is in the chosen tier and still fits the prompt window and images. State is in
+memory, per process, outside the reloadable routing state: it survives overlay
+reloads but not a restart, and replicas do not share it. `x-pinball-tier` bypasses it.
+
 ## Learned overlay
 
 A tuning job can adjust routing without touching `pinball.yaml` (which Argo CD

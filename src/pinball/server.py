@@ -28,11 +28,12 @@ from prometheus_client import (
     generate_latest,
 )
 
-from pinball.config import Tier
+from pinball.config import TIER_ORDER, Sticky, Tier
 from pinball.decide import Decider, Decision
 from pinball.features import BodyError, parse
 from pinball.overlay import Active
 from pinball.reload import Reloader, ReloadMetrics
+from pinball.sticky import Sessions
 
 log = logging.getLogger("pinball")
 
@@ -127,6 +128,7 @@ def create_app(
     metrics: Metrics,
     reload_interval: float | None = None,
     reply_signals: bool = False,
+    sticky: Sticky | None = None,
 ) -> FastAPI:
     """`source` is a fixed Decider, or a Reloader whose active state is read per request.
 
@@ -156,13 +158,26 @@ def create_app(
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
+    sessions = Sessions(sticky) if sticky else None
+
     def decide(
         body: bytes, hint: Tier | None, floor: Tier | None, caller: str
     ) -> tuple[Decision, str, str]:
         # Read the reference once: the whole request uses one consistent state.
         active = current()
         decider, profile = active.select(caller)
-        return decider.decide(parse(body), hint, floor), active.version, profile
+        features = parse(body)
+        remember = sessions if sessions and hint is None and features.user_texts else None
+        key = Sessions.key(caller, features.user_texts[0]) if remember else ""
+        prefer = None
+        if remember and (seen := remember.get(key)):
+            tier, prefer = seen
+            if floor is None or TIER_ORDER.index(tier) > TIER_ORDER.index(floor):
+                floor = tier
+        decision = decider.decide(features, hint, floor, prefer)
+        if remember:
+            remember.put(key, decision.tier, decision.model)
+        return decision, active.version, profile
 
     @app.get("/healthz")
     async def healthz() -> Response:

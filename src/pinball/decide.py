@@ -51,8 +51,13 @@ class Decider:
         self._largest = max(config.models, key=lambda n: config.models[n].prompt_tokens)
 
     def decide(
-        self, features: Features, hint: Tier | None = None, floor: Tier | None = None
+        self,
+        features: Features,
+        hint: Tier | None = None,
+        floor: Tier | None = None,
+        prefer: str | None = None,
     ) -> Decision:
+        """`prefer`: a model to keep if it is in the chosen tier and still fits (stickiness)."""
         texts = [_unwrap(t, self._config.wrapped_user_messages) for t in features.user_texts]
         message = max(
             (self._score_message(t) for t in texts if t is not None),
@@ -76,6 +81,8 @@ class Decider:
 
         est = features.est_prompt_tokens
         model, fit = self._pick(tier, est, features.images > 0)
+        if prefer and prefer != model and self._fits(tier, prefer, est, features.images > 0):
+            model, fit = prefer, "sticky"
         if fit:
             signals.append(fit)
         return Decision(model, tier, score, tuple(signals), est)
@@ -87,6 +94,13 @@ class Decider:
         if score >= t.standard:
             return Tier.STANDARD
         return Tier.LIGHT
+
+    def _fits(self, tier: Tier, name: str, est_tokens: int, images: bool) -> bool:
+        cfg = self._config
+        if name not in cfg.tier_models(tier):
+            return False
+        spec = cfg.models[name]
+        return est_tokens <= spec.prompt_tokens * cfg.headroom and (spec.vision or not images)
 
     def _pick(self, tier: Tier, est_tokens: int, images: bool) -> tuple[str, str]:
         """First model in `tier` (then higher tiers) whose window and inputs fit."""

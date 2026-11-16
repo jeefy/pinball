@@ -33,7 +33,13 @@ def main() -> None:
         raise SystemExit("PINBALL_OVERLAY_RELOAD_SECONDS must be > 0")
     metrics = Metrics.create()
     reloader = Reloader(config, Path(overlay_path) if overlay_path else None, metrics.reload)
-    app = create_app(reloader, metrics, interval if overlay_path else None, config.reply_signals)
+    app = create_app(
+        reloader,
+        metrics,
+        interval if overlay_path else None,
+        config.reply_signals,
+        config.sticky,
+    )
     logging.getLogger("pinball").info(
         "pinball starting models=%d tiers=%s overlay=%s version=%r",
         len(config.models),
