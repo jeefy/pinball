@@ -16,7 +16,7 @@ CREATE TABLE request_logs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, http_s
 CREATE TABLE request_log_payloads (log_id TEXT PRIMARY KEY REFERENCES request_logs(id),
   request_prompt_json TEXT, response_completion_json TEXT);
 """
-NOW = datetime(2026, 11, 7, 12, tzinfo=UTC)
+NOW = datetime.now(UTC)  # SQL filters on the real `now`, so a fixed date rots
 
 
 def add(
