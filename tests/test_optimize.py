@@ -437,6 +437,22 @@ def test_dry_run_makes_zero_gateway_calls(tmp_path: Path):
     assert not (tmp_path / "overlay.yaml").exists()
 
 
+def test_single_model_tiers_skip_the_run_without_touching_the_db(tmp_path: Path):
+    env = env_for(tmp_path)
+    doc = {**BASE_DOC, "tiers": {"light": ["l1"], "standard": ["s1"], "heavy": ["h1"]}}
+    Path(env["PINBALL_CONFIG"]).write_text(yaml.safe_dump(doc))
+
+    class NoDb(FakeDb):
+        def pool(self, days: int):
+            raise AssertionError("must not sample")
+
+    out = io.StringIO()
+    code = cli.main(["run"], env, lambda _: NoDb(), lambda _: FakeGateway(), NOW, out)
+    assert code == 0
+    assert json.loads(out.getvalue())["result"] == "skipped_single_model_tiers"
+    assert not (tmp_path / "overlay.yaml").exists()
+
+
 def test_nightly_run_reorders_writes_overlay_and_audit(tmp_path: Path):
     gw = FakeGateway(better={"s2"})
     code, _ = run(tmp_path, ["run", "--per-tier", "10", "--seed", "1"], traffic(), gw)

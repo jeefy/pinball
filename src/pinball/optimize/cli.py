@@ -98,6 +98,11 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     base = _base(settings)
     live = live_overlay(settings.overlay_path)
     order = _current_order(base, live)
+    if all(len(models) < 2 for models in order.values()):
+        # Nothing to rank: a tier with one model has no pairs to replay.
+        print(json.dumps({"kind": "run", "result": "skipped_single_model_tiers"}), file=deps.out)
+        log.info("skip: every tier lists a single model; add a second model to a tier to optimize")
+        return new_models(settings, deps, ([], order), 0)
     seed = args.seed if args.seed is not None else int(f"{deps.now:%Y%m%d}")
     pool = deps.db.pool(args.days)
     samples = draw_samples(deps.db, args.days, args.per_tier, seed, pool)

@@ -139,6 +139,10 @@ pinball-optimize --check-revert             # run every few hours after `run`
 pinball-optimize discover [--dry-run]       # new-model PRs only (see "New models")
 ```
 
+When every tier lists a single model there is nothing to compare: `run` logs that,
+prints `{"kind": "run", "result": "skipped_single_model_tiers"}`, reads no samples and
+exits 0 (the new-model pass still runs when configured).
+
 Flow of one `run`:
 
 1. **Sample** (read-only Postgres, `PINBALL_OPT_DB_DSN`): successful `auto`
