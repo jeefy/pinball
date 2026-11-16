@@ -87,6 +87,27 @@ def test_pool_filters_like_postgres(db: SqliteDb):
     assert caller == "x" * 64
 
 
+def parts(role: str, text: str) -> dict:
+    return {"role": role, "parts": [{"type": "text", "text": text}]}
+
+
+def test_pool_accepts_agentgateway_1_6_parts_shape(tmp_path: Path):
+    # Given rows logged the 1.6.0 way: prompt and completion are lists of {role, parts}
+    path = tmp_path / "parts.db"
+    c = sqlite3.connect(path)
+    c.executescript(SCHEMA)
+    add(c, "new", req=[parts("system", "s"), parts("user", "hi")], resp=[parts("assistant", "yo")])
+    add(c, "blank-user", req=[parts("user", "  ")], resp=[parts("assistant", "yo")])
+    add(c, "blank-reply", req=[parts("user", "hi")], resp=[parts("assistant", " ")])
+    add(c, "tool-call", req=[{"role": "user", "parts": [{"type": "toolCall", "name": "f"}]}])
+    c.commit()
+    c.close()
+    # When the pool is drawn
+    ids = [r["id"] for r in SqliteDb(f"sqlite:///{path}").pool(7)]
+    # Then only the row with replayable text in both prompt and completion is kept
+    assert ids == ["new"]
+
+
 def test_payloads_decode_json(db: SqliteDb):
     (row,) = db.payloads(["a", "missing"])
     assert row["request"] == [{"role": "user", "content": "hi"}]

@@ -117,6 +117,36 @@ def test_normalisation_drops_tool_turns_and_marks_agentic():
     assert "SECRET" not in json.dumps(plain.record())
 
 
+def test_normalisation_reads_agentgateway_1_6_parts_shape():
+    def msg(role: str, *parts: dict[str, Any]) -> dict[str, Any]:
+        return {"role": role, "parts": list(parts)}
+
+    def text(t: str) -> dict[str, Any]:
+        return {"type": "text", "text": t}
+
+    s = normalize_payload(
+        row(
+            1,
+            request=[
+                msg("system", text("sys")),
+                msg("user", text("q1")),
+                msg("assistant", {"type": "toolCall", "id": "c1", "name": "f"}),
+                msg("tool", {"type": "toolResult", "id": "c1", "content": "out"}),
+                msg("user", text("q2a"), text("q2b")),
+            ],
+            response=[msg("assistant", text("answer"))],
+        )
+    )
+    assert s is not None and s.agentic
+    assert [(m["role"], m["content"]) for m in s.messages] == [
+        ("system", "sys"),
+        ("user", "q1\n\nq2a\nq2b"),
+    ]
+    assert s.served_text == "answer"
+    assert normalize_payload(row(2, response=[msg("assistant", {"type": "toolCall"})])) is None
+    assert normalize_payload(row(3, request=[msg("user", {"type": "toolCall"})])) is None
+
+
 # --- judging ---------------------------------------------------------------------------
 
 
