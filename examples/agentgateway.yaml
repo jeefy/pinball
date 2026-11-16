@@ -38,19 +38,22 @@ llm:
       params:
         baseUrl: http://copilot-api:4141/v1
         apiKey: unused
+  # Each pinball-* model sets reasoning_effort from pinball's normalized answer; when
+  # pinball sends none (client had none, or the model rejects the field) the
+  # expression fails and agentgateway removes the field.
   models:
-    - {name: pinball-claude-haiku-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-5.5}}
-    - {name: pinball-claude-haiku-4.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-4.5}}
-    - {name: pinball-claude-sonnet-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5.5}}
-    - {name: pinball-claude-sonnet-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5}}
-    - {name: pinball-gemini-3.8-flash, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-3.8-flash}}
-    - {name: pinball-claude-opus-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5.5}}
-    - {name: pinball-claude-opus-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5}}
-    - {name: pinball-claude-opus-4.8, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-4.8}}
-    - {name: pinball-claude-fable-5.1, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5.1}}
-    - {name: pinball-claude-fable-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5}}
-    - {name: pinball-gemini-4-argon, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-4-argon}}
-    - {name: pinball-kimi-k3, visibility: internal, provider: {reference: copilot-completions}, params: {model: kimi-k3}}
+    - {name: pinball-claude-haiku-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-5.5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-haiku-4.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-haiku-4.5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-sonnet-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5.5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-sonnet-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-sonnet-5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-gemini-3.8-flash, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-3.8-flash}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-opus-5.5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5.5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-opus-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-opus-4.8, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-opus-4.8}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-fable-5.1, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5.1}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-claude-fable-5, visibility: internal, provider: {reference: copilot-completions}, params: {model: claude-fable-5}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-gemini-4-argon, visibility: internal, provider: {reference: copilot-completions}, params: {model: gemini-4-argon}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
+    - {name: pinball-kimi-k3, visibility: internal, provider: {reference: copilot-completions}, params: {model: kimi-k3}, finalTransformation: {reasoning_effort: 'extauthz.reasoning_effort'}}
   virtualModels:
     - name: auto
       routing:
@@ -93,3 +96,4 @@ llm:
                 model: 'json(response.body).model'
                 tier: 'json(response.body).tier'
                 reason: 'json(response.body).reason'
+                reasoning_effort: 'json(response.body).reasoning_effort'

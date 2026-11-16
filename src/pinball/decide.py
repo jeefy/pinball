@@ -15,7 +15,15 @@ import re
 from dataclasses import dataclass
 from typing import Final, assert_never
 
-from pinball.config import TIER_ORDER, Config, Scoring, Tier, WrappedUserMessage, keyword_pattern
+from pinball.config import (
+    EFFORT_RANK,
+    TIER_ORDER,
+    Config,
+    Scoring,
+    Tier,
+    WrappedUserMessage,
+    keyword_pattern,
+)
 from pinball.features import Effort, Features
 
 _CODE: Final = re.compile(
@@ -31,6 +39,8 @@ class Decision:
     score: int
     signals: tuple[str, ...]
     est_tokens: int
+    # reasoning_effort for the upstream; None = send none (client sent none, or model rejects it).
+    reasoning_effort: str | None = None
 
     @property
     def reason(self) -> str:
@@ -78,7 +88,23 @@ class Decider:
         model, fit = self._pick(tier, est, features.images > 0)
         if fit:
             signals.append(fit)
-        return Decision(model, tier, score, tuple(signals), est)
+        effort = self._effort_for(model, features.effort_word)
+        return Decision(model, tier, score, tuple(signals), est, effort)
+
+    def _effort_for(self, model: str, word: str | None) -> str | None:
+        """The client's effort made acceptable to `model`; the routing signal is untouched."""
+        if word is None:
+            return None
+        allowed = [e for e in EFFORT_RANK if e in self._config.models[model].reasoning_efforts]
+        if not allowed:
+            return None
+        if word in ("none", "minimal"):
+            return allowed[0]
+        if word not in EFFORT_RANK:
+            return word  # unknown word: not ours to judge
+        # nearest allowed value at or below the request, else the lowest allowed
+        below = [e for e in allowed if EFFORT_RANK.index(e) <= EFFORT_RANK.index(word)]
+        return below[-1] if below else allowed[0]
 
     def _tier_for(self, score: int) -> Tier:
         t = self._config.thresholds

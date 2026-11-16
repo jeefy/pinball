@@ -93,6 +93,7 @@ def _reply(
     score: int = 0,
     est_tokens: int = 0,
     signals: tuple[str, ...] | None = None,
+    reasoning_effort: str | None = None,
 ) -> Response:
     payload = {
         "model": model,
@@ -103,6 +104,8 @@ def _reply(
     }
     if signals is not None:
         payload["signals"] = list(signals)
+    if reasoning_effort is not None:
+        payload["reasoning_effort"] = reasoning_effort
     return Response(orjson.dumps(payload), media_type=_JSON)
 
 
@@ -230,6 +233,7 @@ def create_app(
             decision.score,
             decision.est_tokens,
             _signal_names(decision) if reply_signals else None,
+            decision.reasoning_effort,
         )
 
     return app

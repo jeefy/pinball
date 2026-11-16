@@ -115,3 +115,9 @@ def test_reply_signals_opt_in_lists_names_only(metrics: Metrics):
 def test_reply_has_score_and_est_tokens(client: TestClient):
     body = client.post("/check", content=chat("hi " * 500)).json()
     assert isinstance(body["score"], int) and body["est_tokens"] > 0
+
+
+def test_reply_carries_normalized_effort_only_when_there_is_one(client: TestClient):
+    r = client.post("/check", content=chat("Generate a title", reasoning_effort="none"))
+    assert r.json()["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in client.post("/check", content=chat("hi")).json()

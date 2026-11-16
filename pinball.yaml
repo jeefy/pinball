@@ -1,6 +1,9 @@
 # pinball model pool and scoring.
 #
 # models: every Copilot chat model the gateway can reach for `auto`, keyed by
+# reasoning_efforts (default low|medium|high|xhigh|max) lists the reasoning_effort
+# values the upstream accepts; [] means it rejects the field (pinball tells the
+# gateway to drop it). Client none/minimal map to the lowest allowed value.
 # the id pinball returns (extauthz.model). prompt_tokens is Copilot's
 # max_prompt_tokens (GET https://api.githubcopilot.com/models,
 # capabilities.limits); vision is capabilities.supports.vision. Only models
@@ -8,7 +11,7 @@
 # the Responses API, so /responses-only models (gpt-5.x/6.x, grok, mai) 400.
 models:
   claude-haiku-5.5:  {prompt_tokens: 100000, vision: true}
-  claude-haiku-4.5:  {prompt_tokens: 136000, vision: true}
+  claude-haiku-4.5:  {prompt_tokens: 136000, vision: true, reasoning_efforts: []}
   claude-sonnet-5.5: {prompt_tokens: 200000, vision: true}
   claude-sonnet-5:   {prompt_tokens: 200000, vision: true}
   gemini-3.8-flash:  {prompt_tokens: 200000, vision: true}

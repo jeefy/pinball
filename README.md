@@ -36,6 +36,17 @@ client ──model: auto──▶ agentgateway ──POST body──▶ pinball
 [`examples/agentgateway.yaml`](examples/agentgateway.yaml) is a complete,
 validated gateway config.
 
+## Reasoning effort
+
+Upstreams reject some `reasoning_effort` values (Copilot: `none`/`minimal`;
+haiku-4.5: any value). pinball scores the client's effort as before, then
+answers a normalized `reasoning_effort` for the chosen model: `none`/`minimal`
+become the lowest value in the model's `reasoning_efforts`, other values are
+clamped into it, and a model with `reasoning_efforts: []` gets no field (the
+reply omits the key). The example gateway config copies it into
+`extauthz.reasoning_effort`; each `pinball-*` model applies it with a
+`finalTransformation` (a failing expression removes the field).
+
 ## Choosing a tier
 
 The score is the highest-scoring **user-authored** message in the

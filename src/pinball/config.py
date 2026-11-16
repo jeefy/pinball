@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -20,11 +20,17 @@ class Tier(StrEnum):
 TIER_ORDER: tuple[Tier, ...] = (Tier.LIGHT, Tier.STANDARD, Tier.HEAVY)
 
 
+# Lowest to highest: the values Copilot-style upstreams accept for reasoning_effort.
+EFFORT_RANK: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
 class ModelSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_tokens: int = Field(gt=0)
     vision: bool = False
+    # reasoning_effort values the upstream accepts; [] = it rejects the field (drop it).
+    reasoning_efforts: tuple[Literal["low", "medium", "high", "xhigh", "max"], ...] = EFFORT_RANK
 
 
 class Thresholds(BaseModel):

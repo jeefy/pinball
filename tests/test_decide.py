@@ -275,3 +275,41 @@ def test_context_size_adds_points_and_never_falls_as_conversation_grows():
 def test_very_large_context_needs_large_context():
     with pytest.raises(ValueError, match="very_large_context_tokens"):
         CONFIG.scoring.model_validate({"very_large_context_tokens": 10})
+
+
+def _decide(cfg, effort=None, tier=Tier.LIGHT):
+    body = {"model": "auto", "messages": [{"role": "user", "content": "hi"}]}
+    if effort is not None:
+        body["reasoning_effort"] = effort
+    return Decider(cfg).decide(parse(orjson.dumps(body)), tier)
+
+
+def _with_efforts(model, efforts):
+    cfg = load_config()
+    spec = cfg.models[model].model_copy(update={"reasoning_efforts": efforts})
+    return cfg.model_copy(update={"models": {**cfg.models, model: spec}})
+
+
+def test_none_and_minimal_become_lowest_allowed_but_still_score_low():
+    for word in ("none", "minimal"):
+        dec = _decide(load_config(), word)
+        assert dec.model == "claude-haiku-5.5"
+        assert dec.reasoning_effort == "low"
+        assert "effort:low" in dec.signals
+
+
+def test_valid_effort_passes_through_and_absent_stays_absent():
+    assert _decide(load_config(), "high").reasoning_effort == "high"
+    assert _decide(load_config(), "xhigh").reasoning_effort == "xhigh"
+    assert _decide(load_config()).reasoning_effort is None
+
+
+def test_model_without_effort_support_gets_the_field_dropped():
+    cfg = _with_efforts("claude-haiku-5.5", ())
+    assert _decide(cfg, "low").reasoning_effort is None
+
+
+def test_effort_is_clamped_to_the_models_allowed_values():
+    cfg = _with_efforts("claude-haiku-5.5", ("medium", "high"))
+    got = [_decide(cfg, w).reasoning_effort for w in ("none", "low", "max")]
+    assert got == ["medium", "medium", "high"]

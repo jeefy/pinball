@@ -58,6 +58,7 @@ class Features:
     tools: int
     tools_chars: int
     effort: Effort | None
+    effort_word: str | None  # the client's raw reasoning effort word, lowercased
     max_output_tokens: int | None
     structured: bool
 
@@ -101,6 +102,7 @@ def parse(body: bytes) -> Features:
         tools=len(tools_list),
         tools_chars=len(orjson.dumps(tools_list)) if tools_list else 0,
         effort=_effort(doc),
+        effort_word=_effort_word(doc),
         max_output_tokens=_max_output_tokens(doc),
         structured=_structured(doc),
     )
@@ -199,6 +201,16 @@ def _measure(value: Json, acc: _Acc) -> None:
             acc.text_chars += len(s)
         case _:
             acc.text_chars += len(orjson.dumps(value))
+
+
+def _effort_word(doc: dict[str, Json]) -> str | None:
+    match doc:
+        case {"reasoning_effort": str(w)} | {"reasoning": {"effort": str(w)}}:
+            return w.lower()
+        case {"output_config": {"effort": str(w)}}:
+            return w.lower()
+        case _:
+            return None
 
 
 def _effort(doc: dict[str, Json]) -> Effort | None:
