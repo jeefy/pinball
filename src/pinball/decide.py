@@ -75,7 +75,7 @@ class Decider:
             signals.append(f"hint:{hint}")
 
         est = features.est_prompt_tokens
-        model, fit = self._pick(tier, est, features.images > 0)
+        model, fit = self._pick(tier, est, features.images > 0, features.api, features.effort_word)
         if fit:
             signals.append(fit)
         return Decision(model, tier, score, tuple(signals), est)
@@ -88,14 +88,32 @@ class Decider:
             return Tier.STANDARD
         return Tier.LIGHT
 
-    def _pick(self, tier: Tier, est_tokens: int, images: bool) -> tuple[str, str]:
-        """First model in `tier` (then higher tiers) whose window and inputs fit."""
+    def _pick(
+        self,
+        tier: Tier,
+        est_tokens: int,
+        images: bool,
+        api: str = "",
+        effort: str | None = None,
+    ) -> tuple[str, str]:
+        """First model in `tier` (then higher, then lower tiers) that fits and serves the request.
+
+        Window and vision first; a model that cannot serve the API shape or the
+        reasoning_effort word is skipped. Lower tiers are a last resort so a
+        request a whole tier cannot serve still lands on a model that can.
+        """
         cfg = self._config
         primary = cfg.tier_models(tier)[0]
-        for t in TIER_ORDER[TIER_ORDER.index(tier) :]:
+        i = TIER_ORDER.index(tier)
+        order = (*TIER_ORDER[i:], *reversed(TIER_ORDER[:i]))
+        for t in order:
             for name in cfg.tier_models(t):
                 spec = cfg.models[name]
-                if est_tokens <= spec.prompt_tokens * cfg.headroom and (spec.vision or not images):
+                if (
+                    est_tokens <= spec.prompt_tokens * cfg.headroom
+                    and (spec.vision or not images)
+                    and spec.serves(api, effort)
+                ):
                     return name, "" if name == primary else f"fit:{name}"
         return self._largest, f"fit:{self._largest}"
 

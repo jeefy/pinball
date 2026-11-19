@@ -25,6 +25,15 @@ class ModelSpec(BaseModel):
 
     prompt_tokens: int = Field(gt=0)
     vision: bool = False
+    # API shapes served (chat, responses, messages); empty = unknown, not restricted.
+    api: tuple[str, ...] = ()
+    # Accepted reasoning_effort words; None = unknown, () = rejects the parameter.
+    efforts: tuple[str, ...] | None = None
+
+    def serves(self, api: str, effort: str | None) -> bool:
+        if api and self.api and api not in self.api:
+            return False
+        return effort is None or self.efforts is None or effort in self.efforts
 
 
 class Thresholds(BaseModel):
@@ -105,6 +114,8 @@ class Config(BaseModel):
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()
+    # Discovery only: models forced to the front of a tier when listed upstream.
+    pin: dict[Tier, tuple[str, ...]] = Field(default_factory=dict)
     reply_signals: bool = False  # opt-in: add signal names (no content) to the /check reply
 
     @model_validator(mode="after")
