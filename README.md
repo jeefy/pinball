@@ -138,9 +138,10 @@ pinball-optimize run --seed 20261103 --per-tier 20 --days 1 [--candidates a,b]
 pinball-optimize --check-revert             # run every few hours after `run`
 ```
 
-When every tier lists a single model there is nothing to compare: `run` logs that,
-prints `{"kind": "run", "result": "skipped_single_model_tiers"}`, reads no samples and
-exits 0 (the new-model pass still runs when configured).
+When every tier lists a single model there is nothing to compare: `run` exits 0
+without opening the database and prints and audits
+`"result": "skipped_single_model_tiers"` (`--dry-run` prints it only). While the live
+overlay holds caller profiles, `run` still runs, so stale profiles are dropped.
 
 Flow of one `run`:
 
