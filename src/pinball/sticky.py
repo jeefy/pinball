@@ -1,7 +1,9 @@
 """In-memory conversation memory, kept outside the reloadable routing state.
 
-Key: caller + hash of the first user message (stable for a conversation, and
-nothing readable is stored). Value: the tier and model last served. It lives in
+Key: a hash of the caller, the first user message and the opening exchange (the
+first reply and the message after it: written text and tool-call ids). Stable for
+a conversation, distinct for conversations that open with the same scaffolding,
+and nothing readable is stored. Value: the tier and model last served. It lives in
 the app, not in `Active`, so an overlay reload cannot drop it.
 """
 
@@ -23,8 +25,9 @@ class Sessions:
         self._seen: OrderedDict[str, tuple[Tier, str, float]] = OrderedDict()
 
     @staticmethod
-    def key(caller: str, first_user_text: str) -> str:
-        return hashlib.sha256(f"{caller}\0{first_user_text}".encode()).hexdigest()[:32]
+    def key(caller: str, first_user_text: str, opening: str) -> str:
+        raw = f"{caller}\0{first_user_text}\0{opening}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     def get(self, key: str) -> tuple[Tier, str] | None:
         with self._lock:

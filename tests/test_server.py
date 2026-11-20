@@ -135,8 +135,13 @@ class _Swappable:
         self.active = active
 
 
-def _convo(user: str) -> bytes:
-    msgs = [{"role": "user", "content": user}]
+def _convo(user: str, reply: str = "On it.", ask: str = "Go on") -> bytes:
+    """A conversation past its first reply (stickiness starts there)."""
+    msgs = [
+        {"role": "user", "content": user},
+        {"role": "assistant", "content": reply},
+        {"role": "user", "content": ask},
+    ]
     return orjson.dumps({"model": "auto", "messages": msgs, "tools": [{"type": "function"}]})
 
 
@@ -154,6 +159,35 @@ def test_sticky_session_does_not_step_down_after_a_threshold_reload(metrics: Met
     assert r["tier"] == "standard" and "min_tier:standard" in r["reason"]
     other = _convo("Please look at the logs of the failing job in production, same again " * 3)
     assert c.post("/check", content=other).json()["tier"] == "light"  # other conversation
+
+
+def test_sticky_tells_conversations_with_the_same_opening_message_apart(metrics: Metrics):
+    # Agent clients often open every conversation with the same injected user message.
+    c = TestClient(create_app(Decider(load_config()), metrics, sticky=Sticky(sessions=10)))
+    opening = "Context: the repo is ./app, follow AGENTS.md"
+    heavy = "Investigate the root cause of this deadlock and refactor for concurrency"
+    assert c.post("/check", content=_convo(opening, "Reading.", heavy)).json()["tier"] == "heavy"
+    r = c.post("/check", content=_convo(opening, "Which file?", "Give me a title for this")).json()
+    assert r["tier"] == "light" and "min_tier" not in r["reason"]
+
+
+def test_sticky_starts_after_the_first_reply(metrics: Metrics):
+    cfg = load_config()
+    stricter = cfg.model_copy(
+        update={"thresholds": cfg.thresholds.model_copy(update={"standard": 3, "heavy": 5})}
+    )
+    swap = _Swappable(Active(Decider(cfg), {}, ""))
+    c = TestClient(create_app(swap, metrics, sticky=Sticky(sessions=10)))  # type: ignore[arg-type]
+    first = orjson.dumps(
+        {
+            "model": "auto",
+            "messages": [{"role": "user", "content": "Please look at the failing job " * 8}],
+            "tools": [{"type": "function"}],
+        }
+    )
+    assert c.post("/check", content=first).json()["tier"] == "standard"
+    swap.active = Active(Decider(stricter), {}, "v2")
+    assert c.post("/check", content=first).json()["tier"] == "light"  # nothing remembered
 
 
 def test_sticky_keeps_the_model_when_the_tier_is_reordered(metrics: Metrics):

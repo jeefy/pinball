@@ -110,12 +110,16 @@ model and drop its prompt cache. Opt in with a `sticky` block in `pinball.yaml`:
 sticky: {sessions: 1000, ttl_seconds: 3600}   # conversations remembered (LRU), idle expiry
 ```
 
-pinball then remembers, per caller and conversation (a hash of the first user
-message; no text is stored), the tier and model it served. The remembered tier acts
-as a floor (`min_tier:<tier>`), and the remembered model is kept (`sticky`) while it
-is in the chosen tier and still fits the prompt window and images. State is in
-memory, per process, outside the reloadable routing state: it survives overlay
-reloads but not a restart, and replicas do not share it. `x-pinball-tier` bypasses it.
+pinball then remembers, per caller and conversation, the tier and model it served.
+A conversation is identified by a hash of its first user message and its opening
+exchange (the first reply and the message after it: written text and tool-call
+ids; no text is stored), so it is remembered from its second request on and
+conversations that open with the same message are told apart. The remembered
+tier acts as a floor (`min_tier:<tier>`), and the remembered model is kept (`sticky`)
+while it is in the chosen tier and still fits the prompt window, images, API shape
+and `reasoning_effort`. State is in memory, per process, outside the reloadable
+routing state: it survives overlay reloads but not a restart, and replicas do not
+share it. `x-pinball-tier` bypasses it.
 
 ## Learned overlay
 

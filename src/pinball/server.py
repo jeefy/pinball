@@ -175,8 +175,10 @@ def create_app(
         active = current()
         decider, profile = active.select(caller)
         features = parse(body)
-        remember = sessions if sessions and hint is None and features.user_texts else None
-        key = Sessions.key(caller, features.user_texts[0]) if remember else ""
+        # A conversation is known once it has a reply: first user message + opening.
+        known = hint is None and features.user_texts and features.opening
+        remember = sessions if sessions and known else None
+        key = Sessions.key(caller, features.user_texts[0], features.opening) if remember else ""
         prefer = None
         if remember and (seen := remember.get(key)):
             tier, prefer = seen

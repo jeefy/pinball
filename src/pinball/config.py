@@ -94,7 +94,8 @@ class Sticky(BaseModel):
     The score is already monotonic inside one conversation, but a config or
     overlay reload can move thresholds or reorder a tier mid-session, which
     changes the model and drops the prompt cache. With this block pinball
-    keeps the tier as a floor and the model while it still fits.
+    keeps the tier as a floor and the model while it still fits, from a
+    conversation's second request on (first user message + opening exchange).
     State is per process and lost on restart; replicas do not share it.
     """
 

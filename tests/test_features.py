@@ -172,3 +172,44 @@ def test_multimodal_documents_and_audio_count_as_media(block_type: str):
 def test_non_object_bodies_raise_body_error(raw: bytes):
     with pytest.raises(BodyError):
         parse(raw)
+
+
+def test_opening_is_empty_before_the_first_reply():
+    assert parse(body({"messages": [{"role": "user", "content": "hi"}]})).opening == ""
+    assert parse(body({"input": "hi"})).opening == ""
+
+
+def test_opening_tells_apart_chats_with_the_same_first_exchange():
+    def chat(ask: str) -> str:
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": ask},
+            {"role": "assistant", "content": "Sure."},
+            {"role": "user", "content": "and then?"},
+        ]
+        return parse(body({"messages": msgs})).opening
+
+    assert chat("fix the deadlock") != chat("write a title")
+    assert chat("fix the deadlock") == "Hello!\nfix the deadlock"
+
+
+def test_opening_keeps_tool_call_ids_and_skips_tool_output():
+    def agent(call_id: str, output: str) -> str:
+        msgs = [
+            {"role": "user", "content": "Context: follow AGENTS.md"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": call_id}]},
+            {"role": "tool", "tool_call_id": call_id, "content": output},
+        ]
+        return parse(body({"messages": msgs})).opening
+
+    assert agent("call_1", "a.txt") == agent("call_1", "(trimmed)") == "call_1\ncall_1"
+    assert agent("call_1", "a.txt") != agent("call_2", "a.txt")
+    responses = {
+        "input": [
+            {"role": "user", "content": "go"},
+            {"type": "function_call", "call_id": "fc_1", "name": "bash", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "fc_1", "output": "a.txt"},
+        ]
+    }
+    assert parse(body(responses)).opening == "fc_1\nfc_1"
