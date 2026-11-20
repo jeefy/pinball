@@ -50,6 +50,28 @@ def test_keyword_pattern_matches_whole_words_only():
     assert keyword_pattern(()) is None
 
 
+def test_keyword_pattern_wildcard_suffix_matches_word_endings():
+    pat = keyword_pattern(("migrier*", "ursache"))
+    assert pat is not None
+    assert pat.search("Bitte migriere die DB")
+    assert pat.search("Wir migrieren die DB")
+    assert pat.search("die Ursache ist klar")
+    assert not pat.search("Ursachenforschung")
+    assert not pat.search("immigrierte")
+
+
+def test_shipped_german_keywords_score_a_german_request():
+    import orjson
+
+    from pinball.decide import Decider
+    from pinball.features import parse
+
+    text = "Analysiere die Ursache und optimiere die Architektur"
+    body = orjson.dumps({"messages": [{"role": "user", "content": text}]})
+    d = Decider(load_config()).decide(parse(body))
+    assert d.score >= 2 and "kw:architektur" in d.signals
+
+
 def test_scoring_defaults_apply_when_the_block_is_absent():
     s = Config.model_validate(BASE).scoring
     assert (s.code, s.very_long, s.long_chars, s.short_chars, s.max_heavy_keywords) == (

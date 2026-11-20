@@ -15,7 +15,15 @@ import re
 from dataclasses import dataclass
 from typing import Final, assert_never
 
-from pinball.config import TIER_ORDER, Config, Scoring, Tier, WrappedUserMessage, keyword_pattern
+from pinball.config import (
+    TIER_ORDER,
+    Config,
+    Scoring,
+    Tier,
+    WrappedUserMessage,
+    keyword_entries,
+    keyword_pattern,
+)
 from pinball.features import Effort, Features
 
 _CODE: Final = re.compile(
@@ -48,6 +56,8 @@ class Decider:
         self._config = config
         self._heavy = keyword_pattern(config.heavy_keywords)
         self._light = keyword_pattern(config.light_keywords)
+        self._heavy_words = keyword_entries(config.heavy_keywords)
+        self._light_words = keyword_entries(config.light_keywords)
         self._largest = max(config.models, key=lambda n: config.models[n].prompt_tokens)
 
     def decide(
@@ -127,7 +137,9 @@ class Decider:
             signals.append("code")
 
         heavy = sorted(
-            {m.group(0).lower() for m in self._heavy.finditer(text)} if self._heavy else ()
+            {_listed(m, self._heavy_words) for m in self._heavy.finditer(text)}
+            if self._heavy
+            else ()
         )
         if heavy:
             counted = heavy[: s.max_heavy_keywords]
@@ -145,11 +157,17 @@ class Decider:
         light = self._light.search(text) if self._light else None
         if light:
             score += s.light_keyword
-            signals.append(f"light:{light.group(0).lower()}")
+            signals.append(f"light:{_listed(light, self._light_words)}")
         if n < s.short_chars and not code and not heavy:
             score += s.short
             signals.append("short")
         return _MessageScore(score, tuple(signals))
+
+
+def _listed(match: re.Match[str], words: tuple[str, ...]) -> str:
+    """The listed keyword behind a keyword_pattern() match (`migrier*`, not `migrierten`)."""
+    i = match.lastindex
+    return (words[i - 1] if i else match.group(0)).lower()
 
 
 def _unwrap(text: str, wrappers: tuple[WrappedUserMessage, ...]) -> str | None:

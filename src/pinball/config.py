@@ -133,11 +133,24 @@ class Config(BaseModel):
         return self.tiers[tier]
 
 
+def keyword_entries(words: tuple[str, ...]) -> tuple[str, ...]:
+    """Distinct keywords, longest first: the alternation order of keyword_pattern()."""
+    return tuple(sorted(dict.fromkeys(words), key=len, reverse=True))
+
+
 def keyword_pattern(words: tuple[str, ...]) -> re.Pattern[str] | None:
-    """One case-insensitive alternation, longest first, on word boundaries."""
+    """One case-insensitive alternation, longest first, on word boundaries.
+
+    A trailing `*` matches any word ending (`migrier*` -> migriert, migrieren), for
+    languages with inflection. Group i + 1 is keyword_entries(words)[i], so a match
+    can be reported as the listed keyword rather than the word in the text.
+    """
     if not words:
         return None
-    alts = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+    alts = "|".join(
+        "(" + re.escape(w.removesuffix("*")) + (r"\w*" if w.endswith("*") else "") + ")"
+        for w in keyword_entries(words)
+    )
     return re.compile(rf"(?<!\w)(?:{alts})(?!\w)", re.IGNORECASE)
 
 
