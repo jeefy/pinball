@@ -31,6 +31,10 @@ _CODE: Final = re.compile(
     re.MULTILINE,
 )
 
+# reasoning_effort words, lowest to highest; none/minimal are raised to a model's lowest.
+_EFFORT_RANK: Final = ("low", "medium", "high", "xhigh", "max")
+_NO_EFFORT: Final = ("none", "minimal")
+
 
 @dataclass(frozen=True, slots=True)
 class Decision:
@@ -39,6 +43,9 @@ class Decision:
     score: int
     signals: tuple[str, ...]
     est_tokens: int
+    # reasoning_effort for the upstream; None = send no field (client sent none, or the
+    # model rejects the field).
+    reasoning_effort: str | None = None
 
     @property
     def reason(self) -> str:
@@ -85,10 +92,34 @@ class Decider:
             signals.append(f"hint:{hint}")
 
         est = features.est_prompt_tokens
-        model, fit = self._pick(tier, est, features.images > 0, features.api, features.effort_word)
+        word = features.effort_word
+        # Prefer a model that accepts the word; none/minimal are raised below, so they
+        # never rule a model out, and when no model accepts the word it is clamped instead.
+        wanted = None if word in _NO_EFFORT else word
+        images = features.images > 0
+        model, fit = self._pick(tier, est, images, features.api, wanted)
+        if wanted is not None and not self._config.models[model].serves(features.api, wanted):
+            model, fit = self._pick(tier, est, images, features.api)
         if fit:
             signals.append(fit)
-        return Decision(model, tier, score, tuple(signals), est)
+        effort = self._effort_for(model, word)
+        return Decision(model, tier, score, tuple(signals), est, effort)
+
+    def _effort_for(self, model: str, word: str | None) -> str | None:
+        """The client's effort made acceptable to `model`; the routing signal is untouched."""
+        accepted = self._config.models[model].efforts
+        if word is None or accepted is None or word in accepted:
+            return word  # nothing sent, unknown model, or already accepted
+        ranked = [e for e in _EFFORT_RANK if e in accepted]
+        if not ranked:
+            return None  # the model rejects the field
+        if word in _NO_EFFORT:
+            return ranked[0]
+        if word not in _EFFORT_RANK:
+            return word  # unknown word: not ours to judge
+        # nearest accepted word at or below the request, else the lowest accepted
+        below = [e for e in ranked if _EFFORT_RANK.index(e) <= _EFFORT_RANK.index(word)]
+        return below[-1] if below else ranked[0]
 
     def _tier_for(self, score: int) -> Tier:
         t = self._config.thresholds

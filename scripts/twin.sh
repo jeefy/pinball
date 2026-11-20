@@ -7,6 +7,8 @@
 # Checks: `auto` on /v1/chat/completions, /v1/messages and /v1/responses
 # reaches upstream /v1/chat/completions as the model pinball picked (light,
 # heavy, x-pinball-tier hint, a ~2.4 MiB prompt that only kimi-k3 fits);
+# reasoning_effort reaches upstream normalized per model (`none` as `low`,
+# dropped for a model with `efforts: []`, never added when not sent);
 # the access log carries pinball.* attributes; the internal pinball-* models
 # are 404 to clients; pinball's metrics count the decisions; pinball exits on
 # SIGTERM without logging an error; with pinball down `auto` still answers via
@@ -197,11 +199,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self._read_body()
         try:
-            model = json.loads(body).get("model")
+            doc = json.loads(body)
         except ValueError:
-            model = None
+            doc = {}
+        model = doc.get("model")
+        effort = doc.get("reasoning_effort", "-")  # "-": the field was not sent
         with open(f"{OUT}/upstream.jsonl", "a") as fh:
-            fh.write(json.dumps({"path": self.path, "model": model, "bytes": len(body)}) + "\n")
+            fh.write(json.dumps({"path": self.path, "model": model, "effort": effort,
+                                 "bytes": len(body)}) + "\n")
         if self.path != "/v1/chat/completions":
             self._send(404, {"error": "not found"})
             return
@@ -291,14 +296,22 @@ bodies = {
             "messages": [{"role": "user", "content": "lorem ipsum " * (200 << 10)}]},
     "internal": {"model": "pinball-claude-opus-5.5",
                  "messages": [{"role": "user", "content": "hi"}]},
+    # Copilot rejects none: pinball answers low for haiku-5.5.
+    "effort-none": {"model": "auto", "reasoning_effort": "none",
+                    "messages": [{"role": "user", "content": "Generate a short title"}]},
+    # ~103k estimated tokens: past haiku-5.5's window, inside haiku-4.5's, which
+    # rejects reasoning_effort (efforts: []), so the gateway must drop the field.
+    "effort-drop": {"model": "auto", "reasoning_effort": "none",
+                    "messages": [{"role": "user", "content": "lorem ipsum " * 30000}]},
 }
 for name, body in bodies.items():
     with open(f"{work}/req-{name}.json", "w") as fh:
         json.dump(body, fh)
 PY
 
-# post <request> <path> [curl args]: sets CODE and UP (the stub's record of this
-# request as "path model", or "none" if it never reached upstream).
+# post <request> <path> [curl args]: sets CODE, UP (the stub's record of this
+# request as "path model", or "none" if it never reached upstream) and EFFORT (the
+# reasoning_effort upstream received, "-" when absent).
 post() {
     local name="$1" path="$2" seen
     shift 2
@@ -307,12 +320,14 @@ post() {
         -H 'content-type: application/json' -H 'authorization: Bearer twin-dummy' \
         -H 'x-agw-caller: twin' "$@" \
         --data-binary "@${WORK}/req-${name}.json" "http://127.0.0.1:${GW_PORT}${path}")" || true
-    UP="$(python3 - "${WORK}/upstream.jsonl" "${seen}" <<'PY'
+    read -r UP EFFORT < <(python3 - "${WORK}/upstream.jsonl" "${seen}" <<'PY'
 import json, sys
 lines = open(sys.argv[1]).read().splitlines()[int(sys.argv[2]):]
-print(" ".join((lambda r: (r["path"], str(r["model"])))(json.loads(lines[-1]))) if lines else "none")
+r = json.loads(lines[-1]) if lines else None
+print(f"{r['path']}|{r['model']} {r['effort']}" if r else "none none")
 PY
-)"
+)
+    UP="${UP/|/ }"
 }
 
 # expect <desc> <http code> <upstream "path model">
@@ -334,11 +349,21 @@ client_has() {
     fi
 }
 
+# expect_effort <desc> <reasoning_effort upstream received, "-" when absent>
+expect_effort() {
+    if [[ "${EFFORT}" == "$2" ]]; then
+        pass "$1: upstream reasoning_effort ${EFFORT}"
+    else
+        fail "$1: upstream reasoning_effort ${EFFORT}; expected $2"
+    fi
+}
+
 echo "== pinball up"
 post light /v1/chat/completions
 expect "light chat completion" 200 "/v1/chat/completions claude-haiku-5.5"
 client_has "light: client sees the served model" light \
     'out["choices"][0]["message"]["content"] == "served-by:claude-haiku-5.5"'
+expect_effort "no effort sent, none added" -
 
 post heavy /v1/chat/completions
 expect "heavy agentic debugging" 200 "/v1/chat/completions claude-opus-5.5"
@@ -364,17 +389,25 @@ expect "2.4 MiB prompt goes to the largest window" 200 "/v1/chat/completions kim
 post internal /v1/chat/completions
 expect "internal pinball-* model is not client-reachable" 404 "none"
 
+post effort-none /v1/chat/completions
+expect "reasoning_effort none" 200 "/v1/chat/completions claude-haiku-5.5"
+expect_effort "none becomes the model's lowest accepted word" low
+
+post effort-drop /v1/chat/completions -H 'x-pinball-tier: light'
+expect "reasoning_effort on a model that rejects it" 200 "/v1/chat/completions claude-haiku-4.5"
+expect_effort "field dropped for efforts: []" -
+
 curl -sS "http://127.0.0.1:${PINBALL_PORT}/metrics" >"${WORK}/metrics.txt" || true
 grep -E '^pinball_decisions_total' "${WORK}/metrics.txt" || true
 if python3 - "${WORK}/metrics.txt" <<'PY'; then
 import re, sys
 text = open(sys.argv[1]).read()
 total = sum(float(v) for v in re.findall(r"^pinball_decisions_total\{[^}]*\} (\S+)", text, re.M))
-sys.exit(0 if total == 6 and "pinball_errors_total 0.0" in text else 1)
+sys.exit(0 if total == 8 and "pinball_errors_total 0.0" in text else 1)
 PY
-    pass "metrics: 6 decisions, no errors"
+    pass "metrics: 8 decisions, no errors"
 else
-    fail "metrics: expected 6 decisions and pinball_errors_total 0"
+    fail "metrics: expected 8 decisions and pinball_errors_total 0"
 fi
 
 # Access-log lines are written after the response ends.
