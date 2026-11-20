@@ -122,6 +122,12 @@ def test_reply_has_score_and_est_tokens(client: TestClient):
     assert isinstance(body["score"], int) and body["est_tokens"] > 0
 
 
+def test_reply_carries_normalized_effort_only_when_there_is_one(client: TestClient):
+    r = client.post("/check", content=chat("Generate a title", reasoning_effort="none"))
+    assert r.json()["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in client.post("/check", content=chat("hi")).json()
+
+
 class _Swappable:
     """Stands in for a Reloader: `active` is replaced the way an overlay reload does."""
 

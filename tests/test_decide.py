@@ -205,6 +205,14 @@ def test_max_heavy_keywords_caps_signals_and_points():
     assert d.score == 1 and [s for s in d.signals if s.startswith("kw:")] == ["kw:refactor"]
 
 
+def test_wildcard_keyword_counts_once_and_reports_the_listed_entry():
+    stems = CONFIG.model_copy(
+        update={"heavy_keywords": ("optimier*",), "light_keywords": ("zusammenfass*",)}
+    )
+    d = Decider(stems).decide(parse(chat("Optimiere den Optimierer, dann zusammenfassen")))
+    assert d.score == 0 and d.signals == ("kw:optimier*", "light:zusammenfass*")
+
+
 SKILL = (
     '[IMPORTANT: The user has invoked the "ops" skill, indicating they want you to follow '
     "its instructions. The full skill content is loaded below.]"
@@ -275,3 +283,67 @@ def test_context_size_adds_points_and_never_falls_as_conversation_grows():
 def test_very_large_context_needs_large_context():
     with pytest.raises(ValueError, match="very_large_context_tokens"):
         CONFIG.scoring.model_validate({"very_large_context_tokens": 10})
+
+
+def _decide(cfg, effort=None, tier=Tier.LIGHT):
+    body = {"model": "auto", "messages": [{"role": "user", "content": "hi"}]}
+    if effort is not None:
+        body["reasoning_effort"] = effort
+    return Decider(cfg).decide(parse(orjson.dumps(body)), tier)
+
+
+def _with_efforts(efforts, model="claude-haiku-5.5"):
+    cfg = load_config()
+    spec = cfg.models[model].model_copy(update={"efforts": efforts})
+    return cfg.model_copy(update={"models": {**cfg.models, model: spec}})
+
+
+def _all_efforts(efforts):
+    cfg = load_config()
+    models = {n: s.model_copy(update={"efforts": efforts}) for n, s in cfg.models.items()}
+    return cfg.model_copy(update={"models": models})
+
+
+def test_none_and_minimal_become_lowest_accepted_but_still_score_low():
+    cfg = _with_efforts(("low", "medium", "high"))
+    for word in ("none", "minimal"):
+        dec = _decide(cfg, word)
+        assert dec.model == "claude-haiku-5.5"
+        assert dec.reasoning_effort == "low"
+        assert "effort:low" in dec.signals
+
+
+def test_none_does_not_fall_through_to_the_largest_window_model():
+    # Every model takes low..max (as discovery reports for Copilot): `none` used to
+    # match none of them and land on kimi-k3, still sending `none` upstream.
+    dec = _decide(_all_efforts(("low", "medium", "high", "xhigh", "max")), "none")
+    assert (dec.model, dec.reasoning_effort) == ("claude-haiku-5.5", "low")
+    assert not [s for s in dec.signals if s.startswith("fit:")]
+
+
+def test_accepted_effort_passes_through_and_absent_stays_absent():
+    cfg = _with_efforts(("low", "medium", "high", "xhigh", "max"))
+    assert _decide(cfg, "high").reasoning_effort == "high"
+    assert _decide(cfg, "xhigh").reasoning_effort == "xhigh"
+    assert _decide(cfg).reasoning_effort is None
+
+
+def test_unknown_efforts_leave_the_word_untouched():
+    assert _decide(_all_efforts(None), "none").reasoning_effort == "none"
+    assert _decide(_all_efforts(None), "high").reasoning_effort == "high"
+
+
+def test_model_without_effort_support_gets_the_field_dropped():
+    cfg = _with_efforts((), model="claude-haiku-4.5")
+    dec = Decider(cfg).decide(parse(chat("hi", reasoning_effort="low")), Tier.LIGHT, None)
+    assert dec.model == "claude-haiku-5.5"  # the light model that accepts it is preferred
+    alone = cfg.model_copy(update={"tiers": {**cfg.tiers, Tier.LIGHT: ("claude-haiku-4.5",)}})
+    dec = Decider(alone).decide(parse(chat("hi", reasoning_effort="none")), Tier.LIGHT, None)
+    assert (dec.model, dec.reasoning_effort) == ("claude-haiku-4.5", None)
+
+
+def test_effort_no_model_accepts_is_clamped_on_the_tier_model():
+    cfg = _all_efforts(("medium", "high"))
+    got = [_decide(cfg, w) for w in ("none", "low", "max")]
+    assert [d.reasoning_effort for d in got] == ["medium", "medium", "high"]
+    assert {d.model for d in got} == {"claude-haiku-5.5"}  # not the largest-window fallback

@@ -36,6 +36,19 @@ client ──model: auto──▶ agentgateway ──POST body──▶ pinball
 [`examples/agentgateway.yaml`](examples/agentgateway.yaml) is a complete,
 validated gateway config.
 
+## Reasoning effort
+
+Upstreams reject some `reasoning_effort` values (Copilot: `none`/`minimal`;
+haiku-4.5: any value). Each model's `efforts` lists the words it accepts
+(`pinball.yaml`, or discovery). pinball scores the client's effort as before,
+prefers a model that accepts the word, then answers a normalized
+`reasoning_effort` for the chosen model: `none`/`minimal` become the model's
+lowest accepted word, other words are clamped into its list, a model with
+`efforts: []` gets no field (the reply omits the key), and a model without
+`efforts` gets the word as sent. The example gateway config copies it into
+`extauthz.reasoning_effort`; each `pinball-*` model applies it with a
+`finalTransformation` (a failing expression removes the field).
+
 ## Choosing a tier
 
 The score is the highest-scoring **user-authored** message in the
@@ -83,7 +96,9 @@ the tier. `x-pinball-tier` wins when both are present; invalid values are ignore
 All of this lives in [`pinball.yaml`](pinball.yaml): the model pool with
 prompt windows, per-tier preference order, thresholds, signal points and
 cutoffs (`scoring`, every key optional), wrapped user messages, headroom and
-keyword lists. Mount your own copy and point `PINBALL_CONFIG` at it.
+keyword lists (English and German; a trailing `*` matches any word ending, e.g.
+`migrier*`, and every match of it counts and reports as `migrier*`). Mount your own
+copy and point `PINBALL_CONFIG` at it.
 
 ## Session stickiness
 
@@ -153,8 +168,12 @@ psycopg); the serving image does not include it.
 pinball-optimize run --dry-run              # sample + plan + projected cost, no model calls
 pinball-optimize run --seed 20261103 --per-tier 20 --days 1 [--candidates a,b]
 pinball-optimize --check-revert             # run every few hours after `run`
-pinball-optimize discover [--dry-run]       # new-model PRs only (see "New models")
 ```
+
+When every tier lists a single model there is nothing to compare: `run` exits 0
+without opening the database and prints and audits
+`"result": "skipped_single_model_tiers"` (`--dry-run` prints it only). While the live
+overlay holds caller profiles, `run` still runs, so stale profiles are dropped.
 
 Flow of one `run`:
 
@@ -271,14 +290,6 @@ report carries the agentic share per tier, and a tier whose agentic share is
 | `PINBALL_OPT_CALLER_MAX_PROFILES` / `_MAX_CHANGES` / `_STALE_DAYS` | `20` / `5` / `14` |
 | `PINBALL_OPT_CALLER_LIGHT_FAIL_GAP` / `_REVERT_MIN_REQUESTS` | `0.15` / `20` |
 | `PINBALL_OPT_REVERT_HOURS` / `_ERROR_MARGIN` / `_ERROR_FLOOR` / `_COST_MARGIN` / `_MIN_REQUESTS` | `6` / `0.5` / `0.01` / `0.25` / `50` |
-| `PINBALL_GITEA_TOKEN` | unset: the pass is skipped (never logged) |
-| `PINBALL_GITEA_URL` / `PINBALL_GITEA_REPO` | `https://gitea.grizzlygeek.net` / `jeefy/carrier` |
-| `PINBALL_OPT_MODELS_URL` | `http://copilot-api.carrier.svc.cluster.local:4141/v1/models` |
-| `PINBALL_OPT_CANDIDATES` | unset: no evaluation |
-| `PINBALL_OPT_CANDIDATE_BUDGET_USD` | `5.0` (separate from the ranking budget) |
-| `PINBALL_OPT_MERGE_WITHOUT_CHECKS` | off: a PR with no status is never merged |
-| `PINBALL_OPT_MAX_PRS` / `_CANDIDATE_NIGHTS` | `3` / `7` |
-| `PINBALL_OPT_DISCOVERY_STRICT` | off: a failed discovery pass never changes the exit code |
 
 CronJob note: build the image with `uv sync --locked --no-dev --extra optimize`
 and use `command: ["pinball-optimize", "run"]` (nightly) plus
@@ -287,42 +298,32 @@ overlay volume with pinball.
 
 ## New models
 
-The nightly `run` (and `pinball-optimize discover [--dry-run]`) also looks for
-new Copilot models and wires winners into the pool through bot PRs on the
-deployment repo (agentgateway cannot route to a model chosen at runtime, so
-every pool model needs literal gateway config). Two steps, both auto-merged:
+Pinball builds its pool itself when `PINBALL_DISCOVERY_URL` is set (the
+upstream `/v1/models`, for example copilot-api). No Git or deployment-repo
+edits are involved. See [docs/self-discovery.md](docs/self-discovery.md).
 
-1. **Candidate PR** (`pinball-bot/candidate-<id>`): a chat model in
-   `PINBALL_OPT_MODELS_URL` (copilot-api `/v1/models`; embeddings, dated
-   snapshots and legacy GPT-3.5/4/4o ignored) that is not in the pool, the
-   candidate list or its `dropped` list gets ONLY a public `opt-<id>` gateway
-   alias and a `candidates` entry in `k8s/pinball-candidates.yaml`. Nothing
-   live changes.
-2. **Promotion PR** (`pinball-bot/promote-<id>`): on later nights every
-   candidate in the mounted list (`PINBALL_OPT_CANDIDATES`) is replayed on the
-   night's samples of every tier and judged against what the pool served.
-   It wins a tier when it has `PINBALL_OPT_MIN_SAMPLES` non-agentic agreed
-   comparisons and, scored as if appended last, beats the weakest incumbent
-   by the swap margin (largest gap wins). The PR adds it to `models`
-   (`prompt_tokens` = catalogue window capped at 250k, `vision` from the
-   catalogue; missing values default to 100k / false and are flagged in the
-   PR body), at the END of that tier, plus `pinball-<id>`, the `auto` target
-   and placeholder cost rates. The overlay may then move it up.
-   A candidate that won nothing after `PINBALL_OPT_CANDIDATE_NIGHTS` (7) is
-   dropped by a PR (`pinball-bot/drop-<id>`) that removes the alias.
+| Variable | Default |
+|---|---|
+| `PINBALL_DISCOVERY_URL` | unset: the static `models`/`tiers` in `pinball.yaml` |
+| `PINBALL_DISCOVERY_TOKEN` | unset: no `Authorization` header |
+| `PINBALL_DISCOVERY_CACHE` | unset: no cache; set it to a file on a volume |
+| `PINBALL_DISCOVERY_INTERVAL_SECONDS` | `21600` |
 
-Safety: every edit is a line insertion/rewrite next to an anchor (comments
-untouched); before committing, the edited files must pass
-`optimize/invariants.py`, a copy of the deployment's pool drift test. The bot
-merges only after the PR head has a GREEN commit status (it does not rely on
-Gitea's merge-when-checks-succeed, which merges at once without branch
-protection); failed checks leave the PR open, pending ones are retried the
-next night, and PRs are serial (one unmerged PR blocks further ones). At most
-`PINBALL_OPT_MAX_PRS` (3) new PRs per night; an existing branch or PR for the
-same step is never duplicated. A discovery failure is logged and reported
-but never fails the ranking unless `PINBALL_OPT_DISCOVERY_STRICT=1`.
+- Each listed chat model is merged with the shipped catalogue
+  (`src/pinball/catalog.json`, built by `scripts/build_catalog.py` from
+  models.dev and the Terminal-Bench 4.1 leaderboard). Live fields win.
+- Tier: the vendor category (Copilot `model_picker_category`), else
+  Terminal-Bench accuracy (>= 55 heavy, >= 35 standard), else output price per
+  1M tokens (<= 2 light, >= 20 heavy), else standard. Within a tier: higher
+  Terminal-Bench first, then cheaper. An empty tier borrows the nearest one's
+  best model. `pin: {tier: [ids]}` in `pinball.yaml` forces listed models
+  first.
+- A model is never picked for a request it cannot serve: wrong API shape
+  (`supported_endpoints`) or a `reasoning_effort` word it does not accept.
+- On failure pinball serves the cached pool, else the static one.
+- The gateway must accept any model id pinball returns (one wildcard route).
 
-The variables are in the optimizer table above.
+The nightly optimizer still only reorders within tiers.
 
 ## Running
 

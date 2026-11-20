@@ -25,6 +25,15 @@ class ModelSpec(BaseModel):
 
     prompt_tokens: int = Field(gt=0)
     vision: bool = False
+    # API shapes served (chat, responses, messages); empty = unknown, not restricted.
+    api: tuple[str, ...] = ()
+    # Accepted reasoning_effort words; None = unknown, () = rejects the parameter.
+    efforts: tuple[str, ...] | None = None
+
+    def serves(self, api: str, effort: str | None) -> bool:
+        if api and self.api and api not in self.api:
+            return False
+        return effort is None or self.efforts is None or effort in self.efforts
 
 
 class Thresholds(BaseModel):
@@ -122,6 +131,8 @@ class Config(BaseModel):
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()
+    # Discovery only: models forced to the front of a tier when listed upstream.
+    pin: dict[Tier, tuple[str, ...]] = Field(default_factory=dict)
     reply_signals: bool = False  # opt-in: add signal names (no content) to the /check reply
 
     @model_validator(mode="after")
@@ -139,11 +150,24 @@ class Config(BaseModel):
         return self.tiers[tier]
 
 
+def keyword_entries(words: tuple[str, ...]) -> tuple[str, ...]:
+    """Distinct keywords, longest first: the alternation order of keyword_pattern()."""
+    return tuple(sorted(dict.fromkeys(words), key=len, reverse=True))
+
+
 def keyword_pattern(words: tuple[str, ...]) -> re.Pattern[str] | None:
-    """One case-insensitive alternation, longest first, on word boundaries."""
+    """One case-insensitive alternation, longest first, on word boundaries.
+
+    A trailing `*` matches any word ending (`migrier*` -> migriert, migrieren), for
+    languages with inflection. Group i + 1 is keyword_entries(words)[i], so a match
+    can be reported as the listed keyword rather than the word in the text.
+    """
     if not words:
         return None
-    alts = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+    alts = "|".join(
+        "(" + re.escape(w.removesuffix("*")) + (r"\w*" if w.endswith("*") else "") + ")"
+        for w in keyword_entries(words)
+    )
     return re.compile(rf"(?<!\w)(?:{alts})(?!\w)", re.IGNORECASE)
 
 
