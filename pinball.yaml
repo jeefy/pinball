@@ -131,3 +131,7 @@ light_keywords:
   - übersetz*
   - titel
   - ja oder nein
+
+# Optional: keep a conversation on its tier and model across config/overlay reloads
+# (in memory, per process; see README "Session stickiness").
+# sticky: {sessions: 1000, ttl_seconds: 3600}

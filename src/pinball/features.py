@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Final
 
 import orjson
 
@@ -62,6 +63,9 @@ class Features:
     structured: bool
     api: str = ""  # chat, responses or messages ("" = unknown)
     effort_word: str | None = None  # top-level reasoning_effort as sent
+    # Text and ids of the first reply and the message after it ("" before the first
+    # reply); with the first user message it tells conversations apart (stickiness).
+    opening: str = ""
 
     @property
     def est_prompt_tokens(self) -> int:
@@ -107,7 +111,50 @@ def parse(body: bytes) -> Features:
         structured=_structured(doc),
         api=_api(doc),
         effort_word=_effort_word(doc),
+        opening=_opening(doc.get("messages")) or _opening(doc.get("input")),
     )
+
+
+_ID_KEYS: Final = ("id", "call_id", "tool_use_id", "tool_call_id")
+
+
+def _opening(value: Json) -> str:
+    """Text and ids of the first reply and the message after it, or "" before a reply.
+
+    Written text plus tool-call ids (unique per conversation). Tool output is left
+    out, since clients may trim old results. The message after the reply tells apart
+    chats that open with the same exchange ("hi" -> "Hello!").
+    """
+    if not isinstance(value, list):
+        return ""
+    first = next((i for i, item in enumerate(value) if _is_reply(item)), None)
+    if first is None:
+        return ""
+    marks: list[str] = []
+    for item in value[first : first + 2]:
+        _marks(item, marks)
+    return "\n".join(marks)
+
+
+def _is_reply(item: Json) -> bool:
+    match item:
+        case {"role": "assistant"} | {"type": "function_call"}:
+            return True
+        case _:
+            return False
+
+
+def _marks(item: Json, out: list[str]) -> None:
+    """Written text and ids of one message or item (its blocks and tool calls included)."""
+    if not isinstance(item, dict):
+        return
+    content, calls = item.get("content"), item.get("tool_calls")
+    if item.get("role") in ("user", "assistant"):
+        _content(content, _Acc(), out)
+    parts = [item, *(content if isinstance(content, list) else ())]
+    for part in (*parts, *(calls if isinstance(calls, list) else ())):
+        if isinstance(part, dict):
+            out.extend(str(part[k]) for k in _ID_KEYS if isinstance(part.get(k), str))
 
 
 def _api(doc: dict[str, Json]) -> str:

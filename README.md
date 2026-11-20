@@ -100,6 +100,27 @@ keyword lists (English and German; a trailing `*` matches any word ending, e.g.
 `migrier*`, and every match of it counts and reports as `migrier*`). Mount your own
 copy and point `PINBALL_CONFIG` at it.
 
+## Session stickiness
+
+The score never falls inside one conversation, but a reload that changes thresholds
+or a tier's order (overlay, config) can still move a running session to another
+model and drop its prompt cache. Opt in with a `sticky` block in `pinball.yaml`:
+
+```yaml
+sticky: {sessions: 1000, ttl_seconds: 3600}   # conversations remembered (LRU), idle expiry
+```
+
+pinball then remembers, per caller and conversation, the tier and model it served.
+A conversation is identified by a hash of its first user message and its opening
+exchange (the first reply and the message after it: written text and tool-call
+ids; no text is stored), so it is remembered from its second request on and
+conversations that open with the same message are told apart. The remembered
+tier acts as a floor (`min_tier:<tier>`), and the remembered model is kept (`sticky`)
+while it is in the chosen tier and still fits the prompt window, images, API shape
+and `reasoning_effort`. State is in memory, per process, outside the reloadable
+routing state: it survives overlay reloads but not a restart, and replicas do not
+share it. `x-pinball-tier` bypasses it.
+
 ## Learned overlay
 
 A tuning job can adjust routing without touching `pinball.yaml` (which Argo CD

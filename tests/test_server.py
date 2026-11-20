@@ -4,9 +4,10 @@ import orjson
 import pytest
 from fastapi.testclient import TestClient
 
-from pinball.config import Tier, load_config
+from pinball.config import Sticky, Tier, load_config
 from pinball.decide import Decider, Decision
 from pinball.features import Features
+from pinball.overlay import Active
 from pinball.server import Metrics, create_app
 
 
@@ -69,7 +70,11 @@ def test_unreadable_body_answers_200_with_empty_model(client: TestClient, metric
 
 class _Exploding(Decider):
     def decide(
-        self, features: Features, hint: Tier | None = None, floor: Tier | None = None
+        self,
+        features: Features,
+        hint: Tier | None = None,
+        floor: Tier | None = None,
+        prefer: str | None = None,
     ) -> Decision:
         raise RuntimeError("boom")
 
@@ -121,3 +126,94 @@ def test_reply_carries_normalized_effort_only_when_there_is_one(client: TestClie
     r = client.post("/check", content=chat("Generate a title", reasoning_effort="none"))
     assert r.json()["reasoning_effort"] == "low"
     assert "reasoning_effort" not in client.post("/check", content=chat("hi")).json()
+
+
+class _Swappable:
+    """Stands in for a Reloader: `active` is replaced the way an overlay reload does."""
+
+    def __init__(self, active: Active) -> None:
+        self.active = active
+
+
+def _convo(user: str, reply: str = "On it.", ask: str = "Go on") -> bytes:
+    """A conversation past its first reply (stickiness starts there)."""
+    msgs = [
+        {"role": "user", "content": user},
+        {"role": "assistant", "content": reply},
+        {"role": "user", "content": ask},
+    ]
+    return orjson.dumps({"model": "auto", "messages": msgs, "tools": [{"type": "function"}]})
+
+
+def test_sticky_session_does_not_step_down_after_a_threshold_reload(metrics: Metrics):
+    cfg = load_config()
+    stricter = cfg.model_copy(
+        update={"thresholds": cfg.thresholds.model_copy(update={"standard": 3, "heavy": 5})}
+    )
+    swap = _Swappable(Active(Decider(cfg), {}, ""))
+    c = TestClient(create_app(swap, metrics, sticky=Sticky(sessions=10)))  # type: ignore[arg-type]
+    body = _convo("Please look at the logs of the failing job in staging, it is stuck again " * 3)
+    assert c.post("/check", content=body).json()["tier"] == "standard"
+    swap.active = Active(Decider(stricter), {}, "v2")  # alone, these thresholds say light
+    r = c.post("/check", content=body).json()
+    assert r["tier"] == "standard" and "min_tier:standard" in r["reason"]
+    other = _convo("Please look at the logs of the failing job in production, same again " * 3)
+    assert c.post("/check", content=other).json()["tier"] == "light"  # other conversation
+
+
+def test_sticky_tells_conversations_with_the_same_opening_message_apart(metrics: Metrics):
+    # Agent clients often open every conversation with the same injected user message.
+    c = TestClient(create_app(Decider(load_config()), metrics, sticky=Sticky(sessions=10)))
+    opening = "Context: the repo is ./app, follow AGENTS.md"
+    heavy = "Investigate the root cause of this deadlock and refactor for concurrency"
+    assert c.post("/check", content=_convo(opening, "Reading.", heavy)).json()["tier"] == "heavy"
+    r = c.post("/check", content=_convo(opening, "Which file?", "Give me a title for this")).json()
+    assert r["tier"] == "light" and "min_tier" not in r["reason"]
+
+
+def test_sticky_starts_after_the_first_reply(metrics: Metrics):
+    cfg = load_config()
+    stricter = cfg.model_copy(
+        update={"thresholds": cfg.thresholds.model_copy(update={"standard": 3, "heavy": 5})}
+    )
+    swap = _Swappable(Active(Decider(cfg), {}, ""))
+    c = TestClient(create_app(swap, metrics, sticky=Sticky(sessions=10)))  # type: ignore[arg-type]
+    first = orjson.dumps(
+        {
+            "model": "auto",
+            "messages": [{"role": "user", "content": "Please look at the failing job " * 8}],
+            "tools": [{"type": "function"}],
+        }
+    )
+    assert c.post("/check", content=first).json()["tier"] == "standard"
+    swap.active = Active(Decider(stricter), {}, "v2")
+    assert c.post("/check", content=first).json()["tier"] == "light"  # nothing remembered
+
+
+def test_sticky_keeps_the_model_when_the_tier_is_reordered(metrics: Metrics):
+    cfg = load_config()
+    order = {
+        **cfg.tiers,
+        Tier.STANDARD: ("claude-sonnet-5", "claude-sonnet-5.5", "gemini-3.8-flash"),
+    }
+    swap = _Swappable(Active(Decider(cfg), {}, ""))
+    c = TestClient(create_app(swap, metrics, sticky=Sticky(sessions=10)))  # type: ignore[arg-type]
+    body = _convo("Please look at the logs of the failing job in staging, it is stuck again " * 3)
+    assert c.post("/check", content=body).json()["model"] == "claude-sonnet-5.5"
+    swap.active = Active(Decider(cfg.model_copy(update={"tiers": order})), {}, "v2")
+    r = c.post("/check", content=body).json()
+    assert r["model"] == "claude-sonnet-5.5" and r["reason"].endswith("sticky")
+
+
+def test_sticky_off_by_default_follows_the_reordered_tier(metrics: Metrics):
+    cfg = load_config()
+    order = {
+        **cfg.tiers,
+        Tier.STANDARD: ("claude-sonnet-5", "claude-sonnet-5.5", "gemini-3.8-flash"),
+    }
+    swap = _Swappable(Active(Decider(cfg), {}, ""))
+    c = TestClient(create_app(swap, metrics))  # type: ignore[arg-type]
+    body = _convo("Please look at the logs of the failing job in staging, it is stuck again " * 3)
+    c.post("/check", content=body)
+    swap.active = Active(Decider(cfg.model_copy(update={"tiers": order})), {}, "v2")
+    assert c.post("/check", content=body).json()["model"] == "claude-sonnet-5"

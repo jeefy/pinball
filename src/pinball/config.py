@@ -88,6 +88,23 @@ class Scoring(BaseModel):
         return self
 
 
+class Sticky(BaseModel):
+    """Remember each conversation's tier and model in memory (opt-in).
+
+    The score is already monotonic inside one conversation, but a config or
+    overlay reload can move thresholds or reorder a tier mid-session, which
+    changes the model and drops the prompt cache. With this block pinball
+    keeps the tier as a floor and the model while it still fits, from a
+    conversation's second request on (first user message + opening exchange).
+    State is per process and lost on restart; replicas do not share it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sessions: int = Field(gt=0)  # conversations remembered (LRU)
+    ttl_seconds: int = Field(default=3600, gt=0)
+
+
 class WrappedUserMessage(BaseModel):
     """A user-role message that is mostly client scaffolding (e.g. an injected skill file).
 
@@ -111,6 +128,7 @@ class Config(BaseModel):
     thresholds: Thresholds
     scoring: Scoring = Scoring()
     wrapped_user_messages: tuple[WrappedUserMessage, ...] = ()
+    sticky: Sticky | None = None
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()

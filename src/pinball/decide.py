@@ -68,8 +68,13 @@ class Decider:
         self._largest = max(config.models, key=lambda n: config.models[n].prompt_tokens)
 
     def decide(
-        self, features: Features, hint: Tier | None = None, floor: Tier | None = None
+        self,
+        features: Features,
+        hint: Tier | None = None,
+        floor: Tier | None = None,
+        prefer: str | None = None,
     ) -> Decision:
+        """`prefer`: a model to keep if it is in the chosen tier and still fits (stickiness)."""
         texts = [_unwrap(t, self._config.wrapped_user_messages) for t in features.user_texts]
         message = max(
             (self._score_message(t) for t in texts if t is not None),
@@ -99,7 +104,14 @@ class Decider:
         images = features.images > 0
         model, fit = self._pick(tier, est, images, features.api, wanted)
         if wanted is not None and not self._config.models[model].serves(features.api, wanted):
+            wanted = None  # no model accepts it: clamped on the tier's model below
             model, fit = self._pick(tier, est, images, features.api)
+        if (
+            prefer
+            and prefer != model
+            and self._keeps(tier, prefer, est, images, features.api, wanted)
+        ):
+            model, fit = prefer, "sticky"
         if fit:
             signals.append(fit)
         effort = self._effort_for(model, word)
@@ -128,6 +140,21 @@ class Decider:
         if score >= t.standard:
             return Tier.STANDARD
         return Tier.LIGHT
+
+    def _keeps(
+        self, tier: Tier, name: str, est_tokens: int, images: bool, api: str, effort: str | None
+    ) -> bool:
+        """`name` may stay (stickiness): still in `tier` (it may have left the pool after
+        a reload), its window and inputs fit, and it serves the request like _pick needs."""
+        cfg = self._config
+        if name not in cfg.tier_models(tier):
+            return False
+        spec = cfg.models[name]
+        return (
+            est_tokens <= spec.prompt_tokens * cfg.headroom
+            and (spec.vision or not images)
+            and spec.serves(api, effort)
+        )
 
     def _pick(
         self,

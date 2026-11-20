@@ -61,7 +61,12 @@ def main() -> None:
 
         background.append(rediscover)
     app = create_app(
-        reloader, metrics, interval if overlay_path else None, config.reply_signals, background
+        reloader,
+        metrics,
+        interval if overlay_path else None,
+        config.reply_signals,
+        background,
+        config.sticky,
     )
     logging.getLogger("pinball").info(
         "pinball starting models=%d tiers=%s overlay=%s version=%r",
