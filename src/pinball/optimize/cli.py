@@ -179,6 +179,26 @@ def nightly(settings: Settings, args: argparse.Namespace, deps: Deps) -> int:
     return code
 
 
+def _nothing_to_rank(settings: Settings) -> bool:
+    """Every tier lists one model (no pairs to replay) and no caller profile needs the
+    nightly upkeep that only a real run does (dropping stale profiles)."""
+    live = live_overlay(settings.overlay_path)
+    order = _current_order(_base(settings), live)
+    return all(len(models) < 2 for models in order.values()) and not (live and live.callers)
+
+
+def _skip_night(settings: Settings, dry_run: bool, now: datetime, out: TextIO) -> int:
+    """Audited like any run (dry runs never audit); no database, no gateway."""
+    log.info("skip: every tier lists a single model; add a second model to a tier to optimize")
+    entry = {"kind": "run", "at": now.isoformat(), "result": "skipped_single_model_tiers"}
+    if dry_run:
+        print(json.dumps({"dry_run": True, **entry}, indent=2), file=out)
+        return EXIT_OK
+    append_audit(settings.audit_file, entry)
+    print(json.dumps(entry, indent=2), file=out)
+    return EXIT_OK
+
+
 def main(
     argv: list[str] | None = None,
     env: Mapping[str, str] | None = None,
@@ -201,6 +221,8 @@ def main(
     if real_run and not settings.gateway_url and gateway_factory is None:
         print("PINBALL_OPT_GATEWAY_URL is required", file=sys.stderr)
         return EXIT_CONFIG
+    if not args.check_revert and _nothing_to_rank(settings):
+        return _skip_night(settings, args.dry_run, now or datetime.now(UTC), out or sys.stdout)
     db = (db_factory or open_db)(settings.db_dsn)
     gateway = None
     if real_run:
