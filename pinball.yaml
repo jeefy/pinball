@@ -1,27 +1,29 @@
 # pinball model pool and scoring.
 #
 # models: every Copilot chat model the gateway can reach for `auto`, keyed by
-# reasoning_efforts (default low|medium|high|xhigh|max) lists the reasoning_effort
-# values the upstream accepts; [] means it rejects the field (pinball tells the
-# gateway to drop it). Client none/minimal map to the lowest allowed value.
 # the id pinball returns (extauthz.model). prompt_tokens is Copilot's
 # max_prompt_tokens (GET https://api.githubcopilot.com/models,
 # capabilities.limits); vision is capabilities.supports.vision. Only models
 # that serve /chat/completions are listed: copilot-api does not translate to
 # the Responses API, so /responses-only models (gpt-5.x/6.x, grok, mai) 400.
+# efforts: the reasoning_effort words the model accepts, from
+# src/pinball/catalog.json ([] = it rejects the field; unset = unknown, sent as
+# is). pinball prefers a model that accepts the request's word, then answers a
+# normalized word: none/minimal become the lowest accepted, others are clamped
+# into the list, and [] drops the field (README "Reasoning effort").
 models:
-  claude-haiku-5.5:  {prompt_tokens: 100000, vision: true}
-  claude-haiku-4.5:  {prompt_tokens: 136000, vision: true, reasoning_efforts: []}
-  claude-sonnet-5.5: {prompt_tokens: 200000, vision: true}
-  claude-sonnet-5:   {prompt_tokens: 200000, vision: true}
-  gemini-3.8-flash:  {prompt_tokens: 200000, vision: true}
-  claude-opus-5.5:   {prompt_tokens: 200000, vision: true}
-  claude-opus-5:     {prompt_tokens: 200000, vision: true}
-  claude-opus-4.8:   {prompt_tokens: 200000, vision: true}
-  claude-fable-5.1:  {prompt_tokens: 200000, vision: true}
-  claude-fable-5:    {prompt_tokens: 200000, vision: true}
-  gemini-4-argon:    {prompt_tokens: 200000, vision: true}
-  kimi-k3:           {prompt_tokens: 917504, vision: true}
+  claude-haiku-5.5:  {prompt_tokens: 100000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  claude-haiku-4.5:  {prompt_tokens: 136000, vision: true, efforts: []}
+  claude-sonnet-5.5: {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  claude-sonnet-5:   {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  gemini-3.8-flash:  {prompt_tokens: 200000, vision: true, efforts: [low, medium, high]}
+  claude-opus-5.5:   {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  claude-opus-5:     {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  claude-opus-4.8:   {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  claude-fable-5.1:  {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  claude-fable-5:    {prompt_tokens: 200000, vision: true, efforts: [low, medium, high, xhigh, max]}
+  gemini-4-argon:    {prompt_tokens: 200000, vision: true, efforts: [low, medium, high]}
+  kimi-k3:           {prompt_tokens: 917504, vision: true, efforts: [low, high, max]}
 
 # Ordered preference per tier. The first model that fits the request (prompt
 # size, images) wins; when none in the tier fits, the next tier up is tried,

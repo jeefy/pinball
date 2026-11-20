@@ -39,11 +39,13 @@ validated gateway config.
 ## Reasoning effort
 
 Upstreams reject some `reasoning_effort` values (Copilot: `none`/`minimal`;
-haiku-4.5: any value). pinball scores the client's effort as before, then
-answers a normalized `reasoning_effort` for the chosen model: `none`/`minimal`
-become the lowest value in the model's `reasoning_efforts`, other values are
-clamped into it, and a model with `reasoning_efforts: []` gets no field (the
-reply omits the key). The example gateway config copies it into
+haiku-4.5: any value). Each model's `efforts` lists the words it accepts
+(`pinball.yaml`, or discovery). pinball scores the client's effort as before,
+prefers a model that accepts the word, then answers a normalized
+`reasoning_effort` for the chosen model: `none`/`minimal` become the model's
+lowest accepted word, other words are clamped into its list, a model with
+`efforts: []` gets no field (the reply omits the key), and a model without
+`efforts` gets the word as sent. The example gateway config copies it into
 `extauthz.reasoning_effort`; each `pinball-*` model applies it with a
 `finalTransformation` (a failing expression removes the field).
 

@@ -284,32 +284,58 @@ def _decide(cfg, effort=None, tier=Tier.LIGHT):
     return Decider(cfg).decide(parse(orjson.dumps(body)), tier)
 
 
-def _with_efforts(model, efforts):
+def _with_efforts(efforts, model="claude-haiku-5.5"):
     cfg = load_config()
-    spec = cfg.models[model].model_copy(update={"reasoning_efforts": efforts})
+    spec = cfg.models[model].model_copy(update={"efforts": efforts})
     return cfg.model_copy(update={"models": {**cfg.models, model: spec}})
 
 
-def test_none_and_minimal_become_lowest_allowed_but_still_score_low():
+def _all_efforts(efforts):
+    cfg = load_config()
+    models = {n: s.model_copy(update={"efforts": efforts}) for n, s in cfg.models.items()}
+    return cfg.model_copy(update={"models": models})
+
+
+def test_none_and_minimal_become_lowest_accepted_but_still_score_low():
+    cfg = _with_efforts(("low", "medium", "high"))
     for word in ("none", "minimal"):
-        dec = _decide(load_config(), word)
+        dec = _decide(cfg, word)
         assert dec.model == "claude-haiku-5.5"
         assert dec.reasoning_effort == "low"
         assert "effort:low" in dec.signals
 
 
-def test_valid_effort_passes_through_and_absent_stays_absent():
-    assert _decide(load_config(), "high").reasoning_effort == "high"
-    assert _decide(load_config(), "xhigh").reasoning_effort == "xhigh"
-    assert _decide(load_config()).reasoning_effort is None
+def test_none_does_not_fall_through_to_the_largest_window_model():
+    # Every model takes low..max (as discovery reports for Copilot): `none` used to
+    # match none of them and land on kimi-k3, still sending `none` upstream.
+    dec = _decide(_all_efforts(("low", "medium", "high", "xhigh", "max")), "none")
+    assert (dec.model, dec.reasoning_effort) == ("claude-haiku-5.5", "low")
+    assert not [s for s in dec.signals if s.startswith("fit:")]
+
+
+def test_accepted_effort_passes_through_and_absent_stays_absent():
+    cfg = _with_efforts(("low", "medium", "high", "xhigh", "max"))
+    assert _decide(cfg, "high").reasoning_effort == "high"
+    assert _decide(cfg, "xhigh").reasoning_effort == "xhigh"
+    assert _decide(cfg).reasoning_effort is None
+
+
+def test_unknown_efforts_leave_the_word_untouched():
+    assert _decide(_all_efforts(None), "none").reasoning_effort == "none"
+    assert _decide(_all_efforts(None), "high").reasoning_effort == "high"
 
 
 def test_model_without_effort_support_gets_the_field_dropped():
-    cfg = _with_efforts("claude-haiku-5.5", ())
-    assert _decide(cfg, "low").reasoning_effort is None
+    cfg = _with_efforts((), model="claude-haiku-4.5")
+    dec = Decider(cfg).decide(parse(chat("hi", reasoning_effort="low")), Tier.LIGHT, None)
+    assert dec.model == "claude-haiku-5.5"  # the light model that accepts it is preferred
+    alone = cfg.model_copy(update={"tiers": {**cfg.tiers, Tier.LIGHT: ("claude-haiku-4.5",)}})
+    dec = Decider(alone).decide(parse(chat("hi", reasoning_effort="none")), Tier.LIGHT, None)
+    assert (dec.model, dec.reasoning_effort) == ("claude-haiku-4.5", None)
 
 
-def test_effort_is_clamped_to_the_models_allowed_values():
-    cfg = _with_efforts("claude-haiku-5.5", ("medium", "high"))
-    got = [_decide(cfg, w).reasoning_effort for w in ("none", "low", "max")]
-    assert got == ["medium", "medium", "high"]
+def test_effort_no_model_accepts_is_clamped_on_the_tier_model():
+    cfg = _all_efforts(("medium", "high"))
+    got = [_decide(cfg, w) for w in ("none", "low", "max")]
+    assert [d.reasoning_effort for d in got] == ["medium", "medium", "high"]
+    assert {d.model for d in got} == {"claude-haiku-5.5"}  # not the largest-window fallback
