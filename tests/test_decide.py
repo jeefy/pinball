@@ -205,6 +205,14 @@ def test_max_heavy_keywords_caps_signals_and_points():
     assert d.score == 1 and [s for s in d.signals if s.startswith("kw:")] == ["kw:refactor"]
 
 
+def test_wildcard_keyword_counts_once_and_reports_the_listed_entry():
+    stems = CONFIG.model_copy(
+        update={"heavy_keywords": ("optimier*",), "light_keywords": ("zusammenfass*",)}
+    )
+    d = Decider(stems).decide(parse(chat("Optimiere den Optimierer, dann zusammenfassen")))
+    assert d.score == 0 and d.signals == ("kw:optimier*", "light:zusammenfass*")
+
+
 SKILL = (
     '[IMPORTANT: The user has invoked the "ops" skill, indicating they want you to follow '
     "its instructions. The full skill content is loaded below.]"
