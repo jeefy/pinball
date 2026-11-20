@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self
+from typing import Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -20,17 +20,20 @@ class Tier(StrEnum):
 TIER_ORDER: tuple[Tier, ...] = (Tier.LIGHT, Tier.STANDARD, Tier.HEAVY)
 
 
-# Lowest to highest: the values Copilot-style upstreams accept for reasoning_effort.
-EFFORT_RANK: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
-
-
 class ModelSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_tokens: int = Field(gt=0)
     vision: bool = False
-    # reasoning_effort values the upstream accepts; [] = it rejects the field (drop it).
-    reasoning_efforts: tuple[Literal["low", "medium", "high", "xhigh", "max"], ...] = EFFORT_RANK
+    # API shapes served (chat, responses, messages); empty = unknown, not restricted.
+    api: tuple[str, ...] = ()
+    # Accepted reasoning_effort words; None = unknown, () = rejects the parameter.
+    efforts: tuple[str, ...] | None = None
+
+    def serves(self, api: str, effort: str | None) -> bool:
+        if api and self.api and api not in self.api:
+            return False
+        return effort is None or self.efforts is None or effort in self.efforts
 
 
 class Thresholds(BaseModel):
@@ -111,6 +114,8 @@ class Config(BaseModel):
     headroom: float = Field(default=0.9, gt=0, le=1)
     heavy_keywords: tuple[str, ...] = ()
     light_keywords: tuple[str, ...] = ()
+    # Discovery only: models forced to the front of a tier when listed upstream.
+    pin: dict[Tier, tuple[str, ...]] = Field(default_factory=dict)
     reply_signals: bool = False  # opt-in: add signal names (no content) to the /check reply
 
     @model_validator(mode="after")

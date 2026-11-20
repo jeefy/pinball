@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 import anyio.to_thread
 import orjson
@@ -130,6 +130,7 @@ def create_app(
     metrics: Metrics,
     reload_interval: float | None = None,
     reply_signals: bool = False,
+    background: Sequence[Callable[[], Coroutine[Any, Any, None]]] = (),
 ) -> FastAPI:
     """`source` is a fixed Decider, or a Reloader whose active state is read per request.
 
@@ -149,13 +150,17 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if isinstance(source, Reloader) and reload_interval is not None:
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(source.run, reload_interval)
-                yield
-                tg.cancel_scope.cancel()
-        else:
+        polls = isinstance(source, Reloader) and reload_interval is not None
+        if not polls and not background:
             yield
+            return
+        async with anyio.create_task_group() as tg:
+            if isinstance(source, Reloader) and reload_interval is not None:
+                tg.start_soon(source.run, reload_interval)
+            for task in background:
+                tg.start_soon(task)
+            yield
+            tg.cancel_scope.cancel()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 

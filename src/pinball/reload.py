@@ -61,6 +61,18 @@ class Reloader:
         metrics.version.info({"version": ""})
         self.poll()
 
+    def set_base(self, base: Config) -> None:
+        """Swap the base config (a new discovered pool) and re-apply the overlay on it."""
+        self._base = base
+        self._stamp = None
+        if self._path is None:
+            self.active = base_only(base)
+            return
+        previous = self.active
+        self.poll()
+        if self.active is previous:  # overlay rejected or gone: serve the new pool unmerged
+            self.active = base_only(base)
+
     def poll(self) -> None:
         """Reload if the file changed since the last poll."""
         if self._path is None:
